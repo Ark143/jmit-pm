@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jmit
+      POSTGRES_PASSWORD: jmit
+      POSTGRES_DB: jmit_pm
+    ports:
+      - "5432:5432"
+    volumes:
+      - jmit-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jmit -d jmit_pm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  jmit-db:
