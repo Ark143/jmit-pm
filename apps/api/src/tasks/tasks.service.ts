@@ -144,6 +144,21 @@ export class TasksService {
     return this.detail(userId, task.id);
   }
 
+  /**
+   * Every blocker link inside one project, for drawing arrows on the Gantt.
+   * Kept tiny: the UI already has the bars and only needs the edges.
+   */
+  async projectDependencies(userId: string, projectId: string) {
+    await this.access.requireProject(userId, projectId);
+
+    const rows = await this.prisma.taskDependency.findMany({
+      where: { task: { projectId }, dependsOn: { projectId } },
+      select: { taskId: true, dependsOnId: true },
+    });
+
+    return rows;
+  }
+
   async detail(userId: string, taskId: string) {
     await this.access.requireTask(userId, taskId);
 

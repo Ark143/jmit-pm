@@ -22,6 +22,37 @@ const RECURRENCE_LABEL: Record<RecurrenceRule, string> = {
   MONTHLY: "Every month",
 };
 
+const TIMER_KEY = "jmit.timer";
+
+interface RunningTimer {
+  taskId: string;
+  startedAt: number;
+}
+
+/** The clock survives a reload, because losing a running timer feels broken. */
+function readTimer(): RunningTimer | null {
+  try {
+    const raw = window.localStorage.getItem(TIMER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<RunningTimer>;
+    return typeof parsed.taskId === "string" && typeof parsed.startedAt === "number"
+      ? { taskId: parsed.taskId, startedAt: parsed.startedAt }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function elapsedLabel(startedAt: number, now: number) {
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
+}
+
 export function TaskPanel({
   taskId,
   members,
@@ -54,6 +85,15 @@ export function TaskPanel({
   const [recurrenceRule, setRecurrenceRule] = useState<RecurrenceRule>("WEEKLY");
   const [recurrenceInterval, setRecurrenceInterval] = useState("1");
   const [busy, setBusy] = useState(false);
+  const [timer, setTimer] = useState<RunningTimer | null>(() => readTimer());
+  const [clock, setClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!timer) return;
+    setClock(Date.now());
+    const handle = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(handle);
+  }, [timer]);
 
   const refresh = useCallback(async () => {
     if (!taskId) return;
@@ -157,6 +197,25 @@ export function TaskPanel({
       });
       setNote("");
     }, "Could not log time");
+  }
+
+  function startTimer() {
+    if (!taskId) return;
+    const next = { taskId, startedAt: Date.now() };
+    window.localStorage.setItem(TIMER_KEY, JSON.stringify(next));
+    setTimer(next);
+    setClock(Date.now());
+  }
+
+  async function stopTimer() {
+    if (!timer) return;
+    const spent = Math.max(1, Math.round((Date.now() - timer.startedAt) / 60_000));
+    window.localStorage.removeItem(TIMER_KEY);
+    setTimer(null);
+    await run(
+      () => api.tasks.logTime(timer.taskId, { minutes: spent, note: "Timer" }),
+      "Could not log the timer",
+    );
   }
 
   async function remove() {
@@ -876,6 +935,39 @@ export function TaskPanel({
 
               <section className="drawer__section">
                 <h3>Time log</h3>
+                <div className="timer">
+                  {timer?.taskId === task.id ? (
+                    <>
+                      <span className="timer__clock" role="timer" aria-live="off">
+                        {elapsedLabel(timer.startedAt, clock)}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn--sm btn--primary"
+                        onClick={() => void stopTimer()}
+                        disabled={busy}
+                      >
+                        Stop and log
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="hint">
+                        {timer
+                          ? "A timer is running on another task."
+                          : "Run a timer instead of typing minutes."}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn--sm"
+                        onClick={startTimer}
+                        disabled={Boolean(timer)}
+                      >
+                        Start timer
+                      </button>
+                    </>
+                  )}
+                </div>
                 <form className="inline-form" onSubmit={logTime}>
                   <input
                     type="number"

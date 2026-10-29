@@ -50,6 +50,11 @@ enum InviteStatus {
   REVOKED
 }
 
+enum ProjectVisibility {
+  WORKSPACE
+  PRIVATE
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -72,6 +77,8 @@ model User {
   invitesAccepted WorkspaceInvite[] @relation("InvitesAccepted")
   notifications   Notification[]    @relation("Notifications")
   actedNotifications Notification[] @relation("NotificationsActor")
+  projectMemberships ProjectMember[]
+  templates       ProjectTemplate[] @relation("TemplateCreator")
 }
 
 model Workspace {
@@ -86,6 +93,7 @@ model Workspace {
   filters     FilterPreset[]
   invites     WorkspaceInvite[]
   notifications Notification[]
+  templates   ProjectTemplate[]
 }
 
 model Membership {
@@ -110,14 +118,45 @@ model Project {
   description  String?
   color        String   @default("#4f8cff")
   archived     Boolean  @default(false)
+  visibility   ProjectVisibility @default(WORKSPACE)
   createdAt    DateTime @default(now())
 
   workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   statuses     Status[]
   tasks        Task[]
   customFields CustomField[]
+  members      ProjectMember[]
 
   @@unique([workspaceId, key])
+  @@index([workspaceId])
+}
+
+/// Opt-in list that makes a PRIVATE project visible to a workspace member.
+model ProjectMember {
+  projectId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, userId])
+  @@index([userId])
+}
+
+/// A reusable blueprint: columns, custom fields and starter tasks, stored as JSON.
+model ProjectTemplate {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  blueprint   Json
+  createdById String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("TemplateCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
   @@index([workspaceId])
 }
 

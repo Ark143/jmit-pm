@@ -12,6 +12,7 @@ import { NewProjectModal } from "./NewProjectModal";
 import { NotificationBell } from "./NotificationBell";
 import { ProjectPage } from "./ProjectPage";
 import { SearchPage } from "./SearchPage";
+import { WorkloadPage } from "./WorkloadPage";
 
 export function WorkspaceShell() {
   const {
@@ -142,6 +143,15 @@ export function WorkspaceShell() {
             </span>
             My tasks
           </Link>
+          <Link
+            to="/workload"
+            className={location.pathname === "/workload" ? "nav__item is-active" : "nav__item"}
+          >
+            <span className="nav__icon" aria-hidden="true">
+              ▦
+            </span>
+            Workload
+          </Link>
         </nav>
 
         <div className="sidebar__section">
@@ -271,6 +281,7 @@ export function WorkspaceShell() {
             <Routes>
               <Route path="/" element={<DashboardPage workspace={workspace} />} />
               <Route path="/tasks" element={<MyTasksPage workspace={workspace} />} />
+              <Route path="/workload" element={<WorkloadPage workspace={workspace} />} />
               <Route path="/search" element={<SearchPage workspace={workspace} />} />
               <Route
                 path="/p/:projectId"
@@ -292,6 +303,7 @@ export function WorkspaceShell() {
       <NewProjectModal
         open={projectModalOpen}
         workspaceId={activeWorkspaceId}
+        memberCount={workspace?.members.length ?? 1}
         onClose={() => setProjectModalOpen(false)}
         onCreated={async (projectId) => {
           await Promise.all([load(), refreshWorkspaces()]);

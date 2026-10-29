@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
@@ -15,9 +15,10 @@ import {
   toDateInput,
 } from "../lib";
 import { useLiveRefresh } from "../live";
-import { Avatar, EmptyState, Modal, PriorityBadge, Spinner } from "../ui";
+import { Avatar, EmptyState, ErrorNote, Modal, PriorityBadge, Spinner } from "../ui";
 import type {
   CustomFieldType,
+  DependencyEdge,
   FilterPreset,
   Priority,
   ProjectDetail,
@@ -25,6 +26,7 @@ import type {
   TaskListItem,
   WorkspaceDetail,
 } from "../types";
+import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { TaskPanel } from "./TaskPanel";
 
 type View = "board" | "list" | "calendar" | "gantt" | "deadlines";
@@ -66,6 +68,9 @@ export function ProjectPage({
   const [presetName, setPresetName] = useState("");
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [dependencies, setDependencies] = useState<DependencyEdge[]>([]);
 
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>("board");
@@ -87,15 +92,17 @@ export function ProjectPage({
     try {
       setError(null);
       const detail = await api.projects.get(projectId);
-      const [list, tagList, filterList] = await Promise.all([
+      const [list, tagList, filterList, edges] = await Promise.all([
         api.tasks.list(projectId),
         api.workspaces.tags(detail.workspaceId).catch(() => [] as Tag[]),
         api.workspaces.filters(detail.workspaceId, projectId).catch(() => [] as FilterPreset[]),
+        api.tasks.dependencies(projectId).catch(() => [] as DependencyEdge[]),
       ]);
       setProject(detail);
       setTasks(list);
       setTags(tagList);
       setPresets(filterList);
+      setDependencies(edges);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load the project");
       setTasks([]);
@@ -229,6 +236,35 @@ export function ProjectPage({
     }
   }
 
+  async function rescheduleTask(task: TaskListItem, delta: number) {
+    const shift = (value: string | null) =>
+      value ? toDateInput(addDays(new Date(value), delta).toISOString()) : null;
+    const next = { startDate: shift(task.startDate), dueDate: shift(task.dueDate) };
+
+    setTasks(
+      (current) =>
+        current?.map((row) => (row.id === task.id ? { ...row, ...next } : row)) ?? current,
+    );
+
+    try {
+      await api.tasks.update(task.id, next);
+      onWorkspaceChange();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not move that bar");
+      await load();
+    }
+  }
+
+  async function exportCsv() {
+    if (!project) return;
+    try {
+      const { filename, csv } = await api.projects.exportCsv(project.id);
+      downloadText(filename, csv);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not export the tasks");
+    }
+  }
+
   if (error && !project) {
     return <EmptyState title="Project unavailable" body={error} />;
   }
@@ -253,6 +289,15 @@ export function ProjectPage({
         <div className="head-actions">
           <button type="button" className="btn btn--sm" onClick={() => setFieldsOpen(true)}>
             Task fields
+          </button>
+          <button type="button" className="btn btn--sm" onClick={() => setSettingsOpen(true)}>
+            {project.visibility === "PRIVATE" ? "Private · Settings" : "Settings"}
+          </button>
+          <button type="button" className="btn btn--sm" onClick={() => void exportCsv()}>
+            Export
+          </button>
+          <button type="button" className="btn btn--sm" onClick={() => setImportOpen(true)}>
+            Import
           </button>
           <div className="view-switch" role="tablist" aria-label="View">
             {VIEWS.map((option) => (
@@ -637,7 +682,13 @@ export function ProjectPage({
       ) : null}
 
       {view === "gantt" ? (
-        <GanttView tasks={filtered} projectKey={project.key} onOpen={(id) => setOpenTaskId(id)} />
+        <GanttView
+          tasks={filtered}
+          projectKey={project.key}
+          dependencies={dependencies}
+          onOpen={(id) => setOpenTaskId(id)}
+          onReschedule={(task, delta) => void rescheduleTask(task, delta)}
+        />
       ) : null}
 
       {view === "deadlines" ? (
@@ -663,7 +714,125 @@ export function ProjectPage({
           setFieldsOpen(false);
         }}
       />
+
+      <ProjectSettingsModal
+        open={settingsOpen}
+        project={project}
+        workspace={workspace}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={() => {
+          void load();
+          onWorkspaceChange();
+        }}
+      />
+
+      <CsvImportModal
+        open={importOpen}
+        projectId={project.id}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          setImportOpen(false);
+          void load();
+          onWorkspaceChange();
+        }}
+      />
     </div>
+  );
+}
+
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function CsvImportModal({
+  open,
+  projectId,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  projectId: string;
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [csv, setCsv] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function onFile(file: File | undefined) {
+    if (!file) return;
+    setError(null);
+    setCsv(await file.text());
+  }
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!csv.trim()) {
+      setError("Paste some CSV or choose a file first");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      await api.projects.importCsv(projectId, csv);
+      setCsv("");
+      onImported();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not import those rows");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Import tasks from CSV" width={600}>
+      <form className="stack" onSubmit={onSubmit}>
+        <p className="hint">
+          Columns: <code>title</code> (required), <code>status</code>, <code>priority</code>,{" "}
+          <code>assignee</code> (email), <code>startDate</code>, <code>dueDate</code>,{" "}
+          <code>plannedMinutes</code>, <code>tags</code>, <code>description</code>. Export a project
+          first to get a file in exactly this shape.
+        </p>
+
+        <label className="field">
+          <span>CSV file</span>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(event) => void onFile(event.target.files?.[0])}
+          />
+        </label>
+
+        <label className="field">
+          <span>Or paste it</span>
+          <textarea
+            value={csv}
+            onChange={(event) => setCsv(event.target.value)}
+            rows={8}
+            placeholder={"title,status,priority\nDraft launch plan,To do,HIGH"}
+            spellCheck={false}
+          />
+        </label>
+
+        <ErrorNote message={error} />
+
+        <div className="modal__foot">
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn btn--primary" disabled={busy}>
+            {busy ? "Importing…" : "Import tasks"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -684,13 +853,121 @@ function barRange(task: TaskListItem): { start: Date; end: Date } {
 function GanttView({
   tasks,
   projectKey,
+  dependencies,
   onOpen,
+  onReschedule,
 }: {
   tasks: TaskListItem[];
   projectKey: string;
+  dependencies: DependencyEdge[];
   onOpen: (id: string) => void;
+  onReschedule: (task: TaskListItem, deltaDays: number) => void;
 }) {
   const dated = tasks.filter((task) => task.startDate || task.dueDate);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const barRefs = useRef(new Map<string, HTMLButtonElement>());
+  const dragRef = useRef<{ id: string; startX: number; dayWidth: number } | null>(null);
+  const movedRef = useRef(false);
+  const [drag, setDrag] = useState<{ id: string; delta: number; dayWidth: number } | null>(null);
+  const [arrows, setArrows] = useState<Array<{ key: string; d: string }>>([]);
+
+  const ranges = new Map(dated.map((task) => [task.id, barRange(task)]));
+  const allRanges = [...ranges.values()];
+  const min =
+    allRanges.length > 0
+      ? addDays(new Date(Math.min(...allRanges.map((r) => r.start.getTime()))), -1)
+      : startOfDay(new Date());
+  const rawMax =
+    allRanges.length > 0
+      ? new Date(Math.max(...allRanges.map((r) => r.end.getTime())))
+      : addDays(min, 14);
+  const max = addDays(rawMax, 2);
+  const totalDays = Math.min(120, Math.max(3, dayDiff(min, max) + 1));
+  const todayIndex = dayDiff(min, new Date());
+
+  const columns = { gridTemplateColumns: `220px repeat(${totalDays}, minmax(28px, 1fr))` };
+
+  // Arrows are measured from the rendered bars so they stay glued to the grid at
+  // any width. Re-measuring on resize keeps them honest after a window change.
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+
+    const measure = () => {
+      const base = grid.getBoundingClientRect();
+      const paths: Array<{ key: string; d: string }> = [];
+
+      for (const edge of dependencies) {
+        const from = barRefs.current.get(edge.dependsOnId);
+        const to = barRefs.current.get(edge.taskId);
+        if (!from || !to) continue;
+
+        const a = from.getBoundingClientRect();
+        const b = to.getBoundingClientRect();
+        const x1 = a.right - base.left;
+        const y1 = a.top - base.top + a.height / 2;
+        const x2 = b.left - base.left;
+        const y2 = b.top - base.top + b.height / 2;
+        const elbow =
+          x2 > x1 + 16
+            ? x1 + 12
+            : x2 - 12;
+
+        paths.push({
+          key: `${edge.dependsOnId}:${edge.taskId}`,
+          d:
+            x2 > x1 + 16
+              ? `M ${x1} ${y1} H ${elbow} V ${y2} H ${x2 - 2}`
+              : `M ${x1} ${y1} h 12 V ${y2} H ${x2 - 2}`,
+        });
+      }
+
+      setArrows(paths);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(grid);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [dependencies, tasks, totalDays]);
+
+  function onPointerDown(event: ReactPointerEvent<HTMLButtonElement>, task: TaskListItem) {
+    if (event.button !== 0) return;
+    const width = gridRef.current?.getBoundingClientRect().width ?? 0;
+    const dayWidth = Math.max(18, (width - 220) / totalDays);
+
+    dragRef.current = { id: task.id, startX: event.clientX, dayWidth };
+    movedRef.current = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({ id: task.id, delta: 0, dayWidth });
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLButtonElement>, task: TaskListItem) {
+    const current = dragRef.current;
+    if (!current || current.id !== task.id) return;
+
+    const delta = Math.round((event.clientX - current.startX) / current.dayWidth);
+    if (delta !== 0) movedRef.current = true;
+    setDrag({ id: task.id, delta, dayWidth: current.dayWidth });
+  }
+
+  function onPointerUp(event: ReactPointerEvent<HTMLButtonElement>, task: TaskListItem) {
+    const current = dragRef.current;
+    if (!current || current.id !== task.id) return;
+
+    dragRef.current = null;
+    setDrag(null);
+
+    const delta = Math.round((event.clientX - current.startX) / current.dayWidth);
+    if (delta !== 0) {
+      movedRef.current = true;
+      onReschedule(task, delta);
+    }
+  }
 
   if (dated.length === 0) {
     return (
@@ -701,20 +978,10 @@ function GanttView({
     );
   }
 
-  const ranges = new Map(dated.map((task) => [task.id, barRange(task)]));
-  const allRanges = [...ranges.values()];
-  const min = addDays(new Date(Math.min(...allRanges.map((r) => r.start.getTime()))), -1);
-  const rawMax = new Date(Math.max(...allRanges.map((r) => r.end.getTime())));
-  const max = addDays(rawMax, 2);
-  const totalDays = Math.min(120, Math.max(3, dayDiff(min, max) + 1));
-  const todayIndex = dayDiff(min, new Date());
-
-  const columns = { gridTemplateColumns: `220px repeat(${totalDays}, minmax(28px, 1fr))` };
-
   return (
     <div className="gantt">
       <div className="gantt__scroll">
-        <div className="gantt__grid" style={columns}>
+        <div className="gantt__grid" style={{ ...columns, position: "relative" }} ref={gridRef}>
           <div className="gantt__corner">Task</div>
           {Array.from({ length: totalDays }, (_, index) => {
             const date = addDays(min, index);
@@ -728,11 +995,39 @@ function GanttView({
             );
           })}
 
+          <svg className="gantt__arrows" aria-hidden="true">
+            <defs>
+              <marker
+                id="gantt-arrow"
+                viewBox="0 0 8 8"
+                refX="6"
+                refY="4"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto"
+              >
+                <path d="M0,0 L8,4 L0,8 z" fill="#7c8698" />
+              </marker>
+            </defs>
+            {arrows.map((arrow) => (
+              <path
+                key={arrow.key}
+                d={arrow.d}
+                fill="none"
+                stroke="#7c8698"
+                strokeWidth="1.4"
+                strokeDasharray="4 3"
+                markerEnd="url(#gantt-arrow)"
+              />
+            ))}
+          </svg>
+
           {dated.map((task) => {
             const range = ranges.get(task.id) as { start: Date; end: Date };
             const from = Math.max(1, dayDiff(min, range.start) + 1);
             const to = Math.min(totalDays, Math.max(from, dayDiff(min, range.end) + 1));
             const tag = task.tags[0];
+            const active = drag?.id === task.id;
 
             return (
               <div className="gantt__row" key={task.id} style={columns}>
@@ -749,20 +1044,46 @@ function GanttView({
                 </button>
                 <button
                   type="button"
-                  className={`gantt__bar ${isOverdue(task.dueDate) ? "is-late" : ""}`}
+                  ref={(element) => {
+                    if (element) barRefs.current.set(task.id, element);
+                    else barRefs.current.delete(task.id);
+                  }}
+                  className={`gantt__bar ${isOverdue(task.dueDate) ? "is-late" : ""} ${
+                    active ? "is-dragging" : ""
+                  }`}
                   style={{
                     gridColumn: `${from + 1} / ${to + 2}`,
                     background: `${PRIORITY_META[task.priority].color}33`,
                     borderColor: PRIORITY_META[task.priority].color,
+                    transform: active ? `translateX(${drag.delta * drag.dayWidth}px)` : undefined,
                   }}
-                  onClick={() => onOpen(task.id)}
-                  title={`${task.title}${tag ? ` · #${tag.name}` : ""}`}
+                  onPointerDown={(event) => onPointerDown(event, task)}
+                  onPointerMove={(event) => onPointerMove(event, task)}
+                  onPointerUp={(event) => onPointerUp(event, task)}
+                  onPointerCancel={() => {
+                    dragRef.current = null;
+                    setDrag(null);
+                  }}
+                  onClick={() => {
+                    if (movedRef.current) {
+                      movedRef.current = false;
+                      return;
+                    }
+                    onOpen(task.id);
+                  }}
+                  title={`${task.title}${tag ? ` · #${tag.name}` : ""} — drag to reschedule`}
                 >
                   <span
                     className="gantt__bar-fill"
                     style={{ background: PRIORITY_META[task.priority].color }}
                   />
                   <span className="gantt__bar-text">{task.title}</span>
+                  {active && drag.delta !== 0 ? (
+                    <span className="gantt__shift">
+                      {drag.delta > 0 ? "+" : ""}
+                      {drag.delta}d
+                    </span>
+                  ) : null}
                 </button>
               </div>
             );
@@ -770,8 +1091,8 @@ function GanttView({
         </div>
       </div>
       <p className="hint">
-        Bars run from start date to due date. Drag-free by design: change the dates in the task to move
-        them.
+        Drag a bar sideways to reschedule it — both dates move together. Dashed lines show which task
+        waits on which.
       </p>
     </div>
   );

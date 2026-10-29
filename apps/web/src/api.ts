@@ -7,6 +7,7 @@ import type {
   CustomFieldType,
   CustomFieldValue,
   DashboardData,
+  DependencyEdge,
   FilterPreset,
   InvitePreview,
   Member,
@@ -14,6 +15,8 @@ import type {
   Priority,
   ProjectDetail,
   ProjectSummary,
+  ProjectTemplate,
+  ProjectVisibility,
   Recurrence,
   RecurrenceRule,
   ReminderItem,
@@ -29,6 +32,7 @@ import type {
   TaskListItem,
   TaskWithProject,
   TimeLogItem,
+  WorkloadData,
   WorkspaceDetail,
   WorkspaceInvite,
   WorkspaceListItem,
@@ -194,6 +198,8 @@ export const api = {
       request<WorkspaceInvite>(`/workspaces/${id}/invites`, { method: "POST", body }),
     search: (id: string, q: string) =>
       request<SearchResults>(`/workspaces/${id}/search?q=${encodeURIComponent(q)}`),
+    workload: (id: string, days = 14) =>
+      request<WorkloadData>(`/workspaces/${id}/workload?days=${days}`),
     tasks: (id: string, scope: TaskScope) =>
       request<TaskWithProject[]>(`/workspaces/${id}/tasks?scope=${scope}`),
     tags: (id: string) => request<Tag[]>(`/workspaces/${id}/tags`),
@@ -237,15 +243,49 @@ export const api = {
   },
 
   projects: {
-    create: (workspaceId: string, body: { name: string; key: string; color?: string; description?: string }) =>
+    create: (
+      workspaceId: string,
+      body: {
+        name: string;
+        key: string;
+        color?: string;
+        description?: string;
+        visibility?: ProjectVisibility;
+        memberIds?: string[];
+        templateId?: string;
+      },
+    ) =>
       request<ProjectSummary & { statuses: Status[] }>(`/workspaces/${workspaceId}/projects`, {
         method: "POST",
         body,
       }),
     get: (id: string) => request<ProjectDetail>(`/projects/${id}`),
-    update: (id: string, body: { name?: string; description?: string; color?: string; archived?: boolean }) =>
-      request<ProjectSummary>(`/projects/${id}`, { method: "PATCH", body }),
+    update: (
+      id: string,
+      body: {
+        name?: string;
+        description?: string;
+        color?: string;
+        archived?: boolean;
+        visibility?: ProjectVisibility;
+      },
+    ) => request<ProjectSummary>(`/projects/${id}`, { method: "PATCH", body }),
     remove: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: "DELETE" }),
+    setMembers: (id: string, userIds: string[]) =>
+      request<Member["user"][]>(`/projects/${id}/members`, { method: "PUT", body: { userIds } }),
+    templates: (workspaceId: string) =>
+      request<ProjectTemplate[]>(`/workspaces/${workspaceId}/templates`),
+    saveTemplate: (projectId: string, body: { name: string; description?: string }) =>
+      request<ProjectTemplate>(`/projects/${projectId}/templates`, { method: "POST", body }),
+    removeTemplate: (templateId: string) =>
+      request<{ ok: boolean }>(`/templates/${templateId}`, { method: "DELETE" }),
+    exportCsv: (id: string) =>
+      request<{ filename: string; csv: string }>(`/projects/${id}/export`),
+    importCsv: (id: string, csv: string) =>
+      request<{ created: number; skipped: string[] }>(`/projects/${id}/import`, {
+        method: "POST",
+        body: { csv },
+      }),
     addStatus: (id: string, body: { name: string; category?: StatusCategory }) =>
       request<Status>(`/projects/${id}/statuses`, { method: "POST", body }),
     updateStatus: (statusId: string, body: { name?: string; category?: StatusCategory }) =>
@@ -279,6 +319,8 @@ export const api = {
       request<TaskDetail>(`/projects/${projectId}/tasks`, { method: "POST", body }),
     get: (id: string) => request<TaskDetail>(`/tasks/${id}`),
     history: (id: string) => request<TaskHistoryEntry[]>(`/tasks/${id}/history`),
+    dependencies: (projectId: string) =>
+      request<DependencyEdge[]>(`/projects/${projectId}/dependencies`),
     update: (
       id: string,
       body: {

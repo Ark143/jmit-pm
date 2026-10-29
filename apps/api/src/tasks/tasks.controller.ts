@@ -66,6 +66,11 @@ export class TasksController {
     return this.tasks.create(user.userId, projectId, dto);
   }
 
+  @Get("projects/:projectId/dependencies")
+  projectDependencies(@CurrentUser() user: AuthUser, @Param("projectId") projectId: string) {
+    return this.tasks.projectDependencies(user.userId, projectId);
+  }
+
   @Get("workspaces/:workspaceId/tasks")
   mine(
     @CurrentUser() user: AuthUser,

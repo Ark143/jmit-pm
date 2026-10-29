@@ -1,10 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from "@nestjs/common";
 import { AuthUser } from "../auth/auth.types";
 import { CurrentUser, JwtAuthGuard } from "../auth/jwt-auth.guard";
 import {
   CreateCustomFieldDto,
   CreateProjectDto,
   CreateStatusDto,
+  CreateTemplateDto,
+  ImportCsvDto,
+  SetProjectMembersDto,
   UpdateCustomFieldDto,
   UpdateProjectDto,
   UpdateStatusDto,
@@ -38,6 +41,46 @@ export class ProjectsController {
   @Delete("projects/:id")
   remove(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     return this.projects.remove(user.userId, id);
+  }
+
+  // ── Privacy, templates and CSV ──────────────────────────────────────────
+
+  @Put("projects/:id/members")
+  setMembers(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() dto: SetProjectMembersDto,
+  ) {
+    return this.projects.setMembers(user.userId, id, dto);
+  }
+
+  @Get("workspaces/:workspaceId/templates")
+  listTemplates(@CurrentUser() user: AuthUser, @Param("workspaceId") workspaceId: string) {
+    return this.projects.listTemplates(user.userId, workspaceId);
+  }
+
+  @Post("projects/:id/templates")
+  saveTemplate(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() dto: CreateTemplateDto,
+  ) {
+    return this.projects.saveTemplate(user.userId, id, dto);
+  }
+
+  @Delete("templates/:templateId")
+  removeTemplate(@CurrentUser() user: AuthUser, @Param("templateId") templateId: string) {
+    return this.projects.removeTemplate(user.userId, templateId);
+  }
+
+  @Get("projects/:id/export")
+  exportCsv(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.projects.exportCsv(user.userId, id);
+  }
+
+  @Post("projects/:id/import")
+  importCsv(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: ImportCsvDto) {
+    return this.projects.importCsv(user.userId, id, dto);
   }
 
   @Post("projects/:id/statuses")

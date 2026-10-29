@@ -44,21 +44,47 @@ export class WorkspacesService {
       },
     });
 
+    const roleByWorkspace = new Map(memberships.map((m) => [m.workspace.id, m.role]));
+
+    // Members only see public projects plus private ones they were invited to.
+    const privateMemberships = new Set(
+      (
+        await this.prisma.projectMember.findMany({
+          where: { userId },
+          select: { projectId: true },
+        })
+      ).map((row) => row.projectId),
+    );
+
+    const projects = await this.prisma.project.findMany({
+      where: { workspace: { memberships: { some: { userId } } }, archived: false },
+      select: { id: true, workspaceId: true, visibility: true },
+    });
+
+    const visible = projects.filter((project) => {
+      const role = roleByWorkspace.get(project.workspaceId);
+      if (role !== Role.MEMBER) return true;
+      return project.visibility !== "PRIVATE" || privateMemberships.has(project.id);
+    });
+
+    const projectCountByWorkspace = new Map<string, number>();
+    for (const project of visible) {
+      projectCountByWorkspace.set(
+        project.workspaceId,
+        (projectCountByWorkspace.get(project.workspaceId) ?? 0) + 1,
+      );
+    }
+
     const openTasks = await this.prisma.task.groupBy({
       by: ["projectId"],
       where: {
-        project: { workspace: { memberships: { some: { userId } } }, archived: false },
+        projectId: { in: visible.map((project) => project.id) },
         status: { category: { not: StatusCategory.DONE } },
       },
       _count: { _all: true },
     });
 
-    const projects = await this.prisma.project.findMany({
-      where: { workspace: { memberships: { some: { userId } } }, archived: false },
-      select: { id: true, workspaceId: true },
-    });
-
-    const workspaceOfProject = new Map(projects.map((p) => [p.id, p.workspaceId]));
+    const workspaceOfProject = new Map(visible.map((p) => [p.id, p.workspaceId]));
     const openByWorkspace = new Map<string, number>();
     for (const row of openTasks) {
       const wsId = workspaceOfProject.get(row.projectId);
@@ -70,7 +96,7 @@ export class WorkspacesService {
       id: m.workspace.id,
       name: m.workspace.name,
       role: m.role,
-      projectCount: m.workspace._count.projects,
+      projectCount: projectCountByWorkspace.get(m.workspace.id) ?? 0,
       memberCount: m.workspace._count.memberships,
       openTasks: openByWorkspace.get(m.workspace.id) ?? 0,
     }));
@@ -97,6 +123,7 @@ export class WorkspacesService {
 
   async get(userId: string, workspaceId: string) {
     const { role } = await this.access.requireWorkspace(userId, workspaceId);
+    const visibility = this.access.projectVisibilityFilter(userId, role);
 
     const workspace = await this.prisma.workspace.findUniqueOrThrow({
       where: { id: workspaceId },
@@ -106,10 +133,11 @@ export class WorkspacesService {
           include: { user: { select: USER_FIELDS } },
         },
         projects: {
-          where: { archived: false },
+          where: { archived: false, ...visibility },
           orderBy: { createdAt: "asc" },
           include: {
             statuses: { orderBy: { position: "asc" } },
+            members: { select: { userId: true } },
             _count: { select: { tasks: true } },
           },
         },
@@ -138,6 +166,8 @@ export class WorkspacesService {
         key: p.key,
         color: p.color,
         description: p.description,
+        visibility: p.visibility,
+        memberIds: p.members.map((member) => member.userId),
         statuses: p.statuses,
         taskCount: p._count.tasks,
         doneCount: doneByProject.get(p.id) ?? 0,
@@ -364,7 +394,8 @@ export class WorkspacesService {
   // ── Search ──────────────────────────────────────────────────────────────
 
   async search(userId: string, workspaceId: string, rawQuery: string) {
-    await this.access.requireWorkspace(userId, workspaceId);
+    const { role } = await this.access.requireWorkspace(userId, workspaceId);
+    const visibility = this.access.projectVisibilityFilter(userId, role);
 
     const term = rawQuery.trim();
     if (term.length < 2) {
@@ -374,7 +405,7 @@ export class WorkspacesService {
     const [tasks, projects, tags] = await Promise.all([
       this.prisma.task.findMany({
         where: {
-          project: { workspaceId, archived: false },
+          project: { workspaceId, archived: false, ...visibility },
           OR: [
             { title: { contains: term, mode: "insensitive" } },
             { description: { contains: term, mode: "insensitive" } },
@@ -398,6 +429,7 @@ export class WorkspacesService {
         where: {
           workspaceId,
           archived: false,
+          ...visibility,
           name: { contains: term, mode: "insensitive" },
         },
         take: 8,
@@ -414,16 +446,18 @@ export class WorkspacesService {
   }
 
   async dashboard(userId: string, workspaceId: string) {
-    await this.access.requireWorkspace(userId, workspaceId);
+    const { role } = await this.access.requireWorkspace(userId, workspaceId);
+    const visibility = this.access.projectVisibilityFilter(userId, role);
+    const projectScope = { workspaceId, archived: false, ...visibility };
 
     const now = new Date();
     const weekAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     const openWhere = {
-      project: { workspaceId, archived: false },
+      project: projectScope,
       status: { category: { not: StatusCategory.DONE } },
-    } as const;
+    };
 
     const [open, overdue, dueThisWeek, completedThisWeek, byPriority, byStatus, upcoming, activity, members, reminders] =
       await Promise.all([
@@ -436,7 +470,7 @@ export class WorkspacesService {
         }),
         this.prisma.task.count({
           where: {
-            project: { workspaceId, archived: false },
+            project: projectScope,
             status: { category: StatusCategory.DONE },
             completedAt: { gte: weekAgo },
           },
@@ -448,7 +482,7 @@ export class WorkspacesService {
         }),
         this.prisma.task.groupBy({
           by: ["statusId"],
-          where: { project: { workspaceId, archived: false } },
+          where: { project: projectScope },
           _count: { _all: true },
         }),
         this.prisma.task.findMany({
@@ -472,7 +506,7 @@ export class WorkspacesService {
           include: { user: { select: USER_FIELDS } },
         }),
         this.prisma.reminder.findMany({
-          where: { userId, dismissed: false, task: { project: { workspaceId, archived: false } } },
+          where: { userId, dismissed: false, task: { project: projectScope } },
           orderBy: { remindAt: "asc" },
           take: 12,
           include: {
@@ -536,6 +570,142 @@ export class WorkspacesService {
         remindAt: r.remindAt,
         task: r.task,
       })),
+    };
+  }
+
+  // ── Workload ────────────────────────────────────────────────────────────
+
+  /**
+   * Per-person, per-day load for the next few weeks. A task counts on every day
+   * between its start and due date so the timeline shows pressure, not just a
+   * deadline spike.
+   */
+  async workload(userId: string, workspaceId: string, rawDays = "14") {
+    const { role } = await this.access.requireWorkspace(userId, workspaceId);
+    const visibility = this.access.projectVisibilityFilter(userId, role);
+    const span = Math.min(60, Math.max(7, Number.parseInt(rawDays, 10) || 14));
+
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + span - 1);
+    end.setHours(23, 59, 59, 999);
+
+    const projectScope = { workspaceId, archived: false, ...visibility };
+    const openStatus = { category: { not: StatusCategory.DONE } } as const;
+
+    const [members, tasks, overdueRows] = await Promise.all([
+      this.prisma.membership.findMany({
+        where: { workspaceId },
+        orderBy: { createdAt: "asc" },
+        include: { user: { select: USER_FIELDS } },
+      }),
+      this.prisma.task.findMany({
+        where: {
+          project: projectScope,
+          status: openStatus,
+          OR: [
+            { dueDate: { gte: start, lte: end } },
+            { startDate: { gte: start, lte: end } },
+            { AND: [{ startDate: { lte: end } }, { dueDate: { gte: start } }] },
+          ],
+        },
+        orderBy: [{ dueDate: "asc" }, { priority: "desc" }],
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          priority: true,
+          startDate: true,
+          dueDate: true,
+          plannedMinutes: true,
+          assigneeId: true,
+          project: { select: { id: true, name: true, key: true, color: true } },
+          status: { select: { id: true, name: true, category: true } },
+        },
+      }),
+      this.prisma.task.groupBy({
+        by: ["assigneeId"],
+        where: {
+          project: projectScope,
+          status: openStatus,
+          dueDate: { lt: start },
+          assigneeId: { not: null },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const overdueByUser = new Map(overdueRows.map((row) => [row.assigneeId, row._count._all]));
+    const loadByUser = new Map<string, number[]>();
+    for (const member of members) {
+      loadByUser.set(member.userId, Array.from({ length: span }, () => 0));
+    }
+
+    const dayIndex = (date: Date) =>
+      Math.round((startOfDay(date).getTime() - start.getTime()) / 86_400_000);
+    const clamp = (value: number) => Math.max(0, Math.min(span - 1, value));
+
+    const assignments = tasks
+      .map((task) => {
+        const from = task.startDate
+          ? dayIndex(task.startDate)
+          : task.dueDate
+            ? dayIndex(task.dueDate) - 1
+            : null;
+        const to = task.dueDate
+          ? dayIndex(task.dueDate)
+          : task.startDate
+            ? dayIndex(task.startDate) + 1
+            : null;
+        if (from === null || to === null) return null;
+
+        const first = clamp(from);
+        const last = clamp(Math.max(from, to));
+        if (task.assigneeId) {
+          const load = loadByUser.get(task.assigneeId);
+          if (load) {
+            for (let day = first; day <= last; day += 1) load[day] += 1;
+          }
+        }
+
+        return {
+          id: task.id,
+          number: task.number,
+          title: task.title,
+          priority: task.priority,
+          project: task.project,
+          status: task.status,
+          assigneeId: task.assigneeId,
+          startDay: first,
+          endDay: last,
+          startDate: task.startDate,
+          dueDate: task.dueDate,
+          plannedMinutes: task.plannedMinutes,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    const days = Array.from({ length: span }, (_, index) => {
+      const date = new Date(start);
+      date.setDate(date.getDate() + index);
+      return isoDay(date);
+    });
+
+    return {
+      range: { start: days[0], end: days[days.length - 1], days },
+      members: members.map((member) => {
+        const load = loadByUser.get(member.userId) ?? [];
+        return {
+          user: member.user,
+          role: member.role,
+          overdue: overdueByUser.get(member.userId) ?? 0,
+          total: load.reduce((sum, value) => sum + value, 0),
+          peak: load.reduce((max, value) => Math.max(max, value), 0),
+          load,
+        };
+      }),
+      assignments,
     };
   }
 
@@ -699,4 +869,16 @@ export class WorkspacesService {
 
     return workspace;
   }
+}
+
+function startOfDay(date: Date) {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function isoDay(date: Date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }

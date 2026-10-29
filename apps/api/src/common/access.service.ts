@@ -40,6 +40,7 @@ export class AccessService {
     if (!project) throw new NotFoundException("Project not found");
 
     const access = await this.requireWorkspace(userId, project.workspaceId);
+    await this.assertProjectVisible(userId, access.role, project);
     return { ...access, project };
   }
 
@@ -51,7 +52,34 @@ export class AccessService {
     if (!task) throw new NotFoundException("Task not found");
 
     const access = await this.requireWorkspace(userId, task.project.workspaceId);
+    await this.assertProjectVisible(userId, access.role, task.project);
     return { ...access, project: task.project, task };
+  }
+
+  /**
+   * Private projects act like a room with a guest list: admins and owners can
+   * always walk in, everyone else needs an explicit ProjectMember row. We hide
+   * the project instead of saying "forbidden" so a member can't probe for the
+   * existence of projects they were not invited to.
+   */
+  async assertProjectVisible(userId: string, role: Role, project: Project) {
+    if (project.visibility !== "PRIVATE" || role !== Role.MEMBER) return;
+
+    const membership = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId: project.id, userId } },
+    });
+    if (!membership) throw new NotFoundException("Project not found");
+  }
+
+  /** Projects this user is allowed to see inside a workspace. */
+  projectVisibilityFilter(userId: string, role: Role) {
+    if (role !== Role.MEMBER) return {};
+    return {
+      OR: [
+        { visibility: "WORKSPACE" as const },
+        { members: { some: { userId } } },
+      ],
+    };
   }
 
   async requireAdmin(userId: string, workspaceId: string): Promise<WorkspaceAccess> {

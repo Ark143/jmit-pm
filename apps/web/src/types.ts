@@ -3,6 +3,7 @@ export type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 export type StatusCategory = "TODO" | "IN_PROGRESS" | "DONE";
 export type CustomFieldType = "TEXT" | "NUMBER" | "DATE" | "SELECT" | "CHECKBOX" | "URL";
 export type RecurrenceRule = "DAILY" | "WEEKLY" | "MONTHLY";
+export type ProjectVisibility = "WORKSPACE" | "PRIVATE";
 
 export interface User {
   id: string;
@@ -42,6 +43,8 @@ export interface ProjectSummary {
   key: string;
   color: string;
   description: string | null;
+  visibility: ProjectVisibility;
+  memberIds: string[];
   statuses: Status[];
   taskCount: number;
   doneCount: number;
@@ -250,10 +253,62 @@ export interface ProjectDetail {
   key: string;
   color: string;
   description: string | null;
+  visibility: ProjectVisibility;
   createdAt: string;
   statuses: Status[];
   customFields: CustomField[];
+  members: User[];
   taskCount: number;
+}
+
+export interface ProjectTemplate {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string | null;
+  blueprint: {
+    statuses?: Array<{ name: string; category?: StatusCategory; position?: number }>;
+    customFields?: Array<{ name: string; type: CustomFieldType; options?: string[] }>;
+    tasks?: Array<{ title: string }>;
+  };
+  createdById: string;
+  createdAt: string;
+  createdBy: Pick<User, "id" | "name" | "color">;
+}
+
+export interface DependencyEdge {
+  taskId: string;
+  dependsOnId: string;
+}
+
+export interface WorkloadAssignment {
+  id: string;
+  number: number;
+  title: string;
+  priority: Priority;
+  project: { id: string; name: string; key: string; color: string };
+  status: { id: string; name: string; category: StatusCategory };
+  assigneeId: string | null;
+  startDay: number;
+  endDay: number;
+  startDate: string | null;
+  dueDate: string | null;
+  plannedMinutes: number | null;
+}
+
+export interface WorkloadMember {
+  user: User;
+  role: Role;
+  overdue: number;
+  total: number;
+  peak: number;
+  load: number[];
+}
+
+export interface WorkloadData {
+  range: { start: string; end: string; days: string[] };
+  members: WorkloadMember[];
+  assignments: WorkloadAssignment[];
 }
 
 export interface DashboardReminder {

@@ -11,7 +11,7 @@ import {
   Min,
   MinLength,
 } from "class-validator";
-import { CustomFieldType, StatusCategory } from "@prisma/client";
+import { CustomFieldType, ProjectVisibility, StatusCategory } from "@prisma/client";
 
 export class CreateProjectDto {
   @IsString()
@@ -32,6 +32,21 @@ export class CreateProjectDto {
   @IsOptional()
   @IsHexColor()
   color?: string;
+
+  @IsOptional()
+  @IsEnum(ProjectVisibility)
+  visibility?: ProjectVisibility;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  memberIds?: string[];
+
+  /** Optional blueprint to copy columns, fields and starter tasks from. */
+  @IsOptional()
+  @IsString()
+  templateId?: string;
 }
 
 export class UpdateProjectDto {
@@ -53,6 +68,35 @@ export class UpdateProjectDto {
   @IsOptional()
   @IsBoolean()
   archived?: boolean;
+
+  @IsOptional()
+  @IsEnum(ProjectVisibility)
+  visibility?: ProjectVisibility;
+}
+
+export class SetProjectMembersDto {
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  userIds!: string[];
+}
+
+export class CreateTemplateDto {
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  description?: string;
+}
+
+export class ImportCsvDto {
+  @IsString()
+  @MaxLength(1_000_000)
+  csv!: string;
 }
 
 export class CreateStatusDto {
