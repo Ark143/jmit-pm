@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
-import { PRIORITY_META, avatarColor, initials } from "./lib";
+import { PRIORITY_META, avatarColor, initials, readableInk } from "./lib";
 import type { Priority, User } from "./types";
 
 export function Avatar({
@@ -20,6 +20,7 @@ export function Avatar({
         width: size,
         height: size,
         background: avatarColor(user),
+        color: readableInk(avatarColor(user)),
         fontSize: Math.max(10, Math.round(size * 0.4)),
       }}
     >
