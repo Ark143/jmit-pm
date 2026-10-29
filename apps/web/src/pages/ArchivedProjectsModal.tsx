@@ -63,6 +63,24 @@ export function ArchivedProjectsModal({
     }
   }
 
+  async function purge(project: ArchivedProject) {
+    const confirmed = window.confirm(
+      `Permanently delete "${project.name}"? Its ${project._count.tasks} task(s), comments, and time logs go with it. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setBusyId(project.id);
+    setError(null);
+    try {
+      await api.projects.purge(project.id);
+      setItems((rows) => rows.filter((row) => row.id !== project.id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not delete that project");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <Modal open={open} onClose={onClose} title="Archived projects" width={520}>
       <p className="modal__hint">
@@ -95,6 +113,15 @@ export function ArchivedProjectsModal({
                 disabled={busyId === project.id}
               >
                 {busyId === project.id ? "Restoring…" : "Restore"}
+              </button>
+              <button
+                type="button"
+                className="btn btn--sm btn--danger"
+                onClick={() => void purge(project)}
+                disabled={busyId === project.id}
+                aria-label={`Delete ${project.name} permanently`}
+              >
+                Delete
               </button>
             </li>
           ))}

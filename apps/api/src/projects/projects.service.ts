@@ -216,6 +216,30 @@ export class ProjectsService {
     return restored;
   }
 
+  /**
+   * Permanent removal is only allowed from the archive, so a stray click can
+   * never destroy a working project. Admin-only, and logged.
+   */
+  async purge(userId: string, projectId: string) {
+    const { project, workspaceId } = await this.access.requireProject(userId, projectId);
+    await this.access.requireAdmin(userId, workspaceId);
+
+    if (!project.archived) {
+      throw new BadRequestException("Archive the project before deleting it permanently");
+    }
+
+    await this.prisma.project.delete({ where: { id: projectId } });
+    await this.access.log(
+      workspaceId,
+      userId,
+      "project.purge",
+      `permanently deleted project ${project.name}`,
+    );
+    this.events.emit(workspaceId, "project.changed");
+
+    return { ok: true };
+  }
+
   // ── Privacy: who can open a private project ─────────────────────────────
 
   async setMembers(userId: string, projectId: string, dto: SetProjectMembersDto) {

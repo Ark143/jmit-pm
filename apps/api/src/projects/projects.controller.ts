@@ -48,6 +48,11 @@ export class ProjectsController {
     return this.projects.restore(user.userId, id);
   }
 
+  @Delete("projects/:id/permanent")
+  purge(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.projects.purge(user.userId, id);
+  }
+
   // ── Privacy, templates and CSV ──────────────────────────────────────────
 
   @Put("projects/:id/members")

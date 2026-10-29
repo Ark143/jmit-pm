@@ -351,6 +351,8 @@ export const api = {
     ) => request<ProjectSummary>(`/projects/${id}`, { method: "PATCH", body }),
     remove: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: "DELETE" }),
     restore: (id: string) => request<ProjectSummary>(`/projects/${id}/restore`, { method: "POST" }),
+    purge: (id: string) =>
+      request<{ ok: boolean }>(`/projects/${id}/permanent`, { method: "DELETE" }),
     setMembers: (id: string, userIds: string[]) =>
       request<Member["user"][]>(`/projects/${id}/members`, { method: "PUT", body: { userIds } }),
     templates: (workspaceId: string) =>
