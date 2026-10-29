@@ -1,39 +1,58 @@
 # JMIT PM
 
-A project management app: projects, tasks, Kanban board, workload, time tracking, and a workspace activity feed. NestJS + PostgreSQL on the back end, React + Vite on the front.
+A project management app: projects, tasks, Kanban board, Gantt, workload, time tracking, and a workspace activity feed. NestJS + PostgreSQL on the back end, React + Vite on the front.
 
-Built as an original implementation — not a clone of any commercial product.
+Built as an original implementation - not a clone of any commercial product.
 
 ```
 apps/
-  api/    NestJS + Prisma + PostgreSQL   (JWT auth, RBAC, REST)
+  api/    NestJS + Prisma + PostgreSQL   (JWT auth, RBAC, REST, SSE)
   web/    React 19 + Vite + TypeScript   (static build, any host)
 ```
 
 ## What's implemented
 
 **Projects & tasks**
-- Projects with custom keys (`WEB-14`), colours, descriptions, archive
-- Tasks: title, rich description, status, priority, assignee, start/due dates, estimate
-- Subtasks (one level), comments, time logs (per user, per task)
+- Projects with custom keys (`WEB-14`), colours, descriptions, archive, restore, and permanent delete from the archive
+- Private projects with a guest list: admins always see them, members only when invited, everyone else gets a 404
+- Project templates: save a project's columns, custom fields, and sample tasks, then create from it
+- Tasks: title, rich description, status, priority, assignee, start/due dates, estimate, tags, observers
+- Subtasks (one level), checklists, comments, time logs (per user, per task), attachments
+- Custom fields per project (text, number, date, dropdown)
+- Task dependencies, recurrence rules, and reminders
 - Per-project status columns with categories (To do / In progress / Done)
 
 **Views**
-- **Board** — drag and drop between columns, ordered by fractional position
-- **List** — sortable table with inline priority and due-date flags
-- **Calendar** — month grid keyed on due dates
-- **Dashboard** — open / overdue / completed-this-week counters, workload per person, priority mix, upcoming deadlines, activity feed
-- **My tasks** — assigned, created, overdue, and completed across every project
+- **Board** - drag and drop between columns, ordered by fractional position
+- **List** - sortable table with inline priority and due-date flags
+- **Calendar** - month grid keyed on due dates
+- **Gantt** - dependency arrows, drag a bar to reschedule both dates
+- **Workload** - 7/14/30-day heatmap of open tasks per person, with the tasks behind each cell
+- **Dashboard** - open / overdue / completed-this-week counters, workload, priority mix, upcoming deadlines, activity feed
+- **My tasks** - assigned, created, overdue, and completed across every project
+- **Search** - tasks, projects, and tags across the workspace
 
 **Collaboration & access**
 - Email + password auth, bcrypt hashing, JWT sessions (30 days)
 - Workspaces with members and roles: `OWNER`, `ADMIN`, `MEMBER`
+- Invite links that work before the person has an account (14-day expiry, email-bound)
+- Notification inbox with per-person read state
+- Live updates over Server-Sent Events, with a 30 s poll as fallback
+- Task history so every move, edit, and assignment is traceable
 - Permission checks centralised in `AccessService` so no endpoint can drift
 - Activity log for task moves, comments, member changes
 
+**Data & operations**
+- CSV export and import (RFC 4180 parser, handles quoted fields and newlines)
+- One-click JSON workspace backup (projects, tasks, comments, time logs, settings)
+- Saved filter presets per workspace and per project
+- Helmet headers, per-client rate limits (tight on login/register), 2 MB body cap
+- DB-backed health check that returns 503 when Postgres is unreachable
+- Indexes on the hot read paths (project + due date, task history, notification feed)
+
 ## Not implemented (deliberately)
 
-The reference product this was inspired by ships ~20 modules. This is the tasks/projects core, not the whole suite. Not included: CRM, calendar sync, file storage, chat, telephony, invoicing, automation rules, custom fields, webhooks, SSO, email notifications, realtime websocket updates, and granular per-field permissions.
+The reference product this was inspired by ships ~20 modules. This is the tasks/projects core, not the whole suite. Not included: CRM, calendar sync, chat, telephony, invoicing, automation rules, webhooks, SSO, outbound email, and granular per-field permissions.
 
 ## Run locally
 
@@ -55,24 +74,24 @@ With Docker for the database only:
 docker compose up -d db
 ```
 
-Register an account — you land in a workspace pre-populated with a sample project.
+Register an account - you land in a workspace pre-populated with a sample project.
 
 ## Deploy
 
-### 1. API + database → Render
+### 1. API + database -> Render
 
-The repo contains `render.yaml`. On Render: **New → Blueprint**, pick this repo, apply. That provisions:
+The repo contains `render.yaml`. On Render: **New -> Blueprint**, pick this repo, apply. That provisions:
 
-- `jmit-pm-db` — managed PostgreSQL, `DATABASE_URL` injected automatically
-- `jmit-pm-api` — Docker build of `apps/api`, migrations run on boot
+- `jmit-pm-db` - managed PostgreSQL, `DATABASE_URL` injected automatically
+- `jmit-pm-api` - Docker build of `apps/api`, migrations run on boot
 
-Note the service URL, e.g. `https://jmit-pm-api.onrender.com`. Free instances sleep after 15 minutes of inactivity, so the first request after idle takes ~30s.
+Note the service URL, e.g. `https://jmit-pm-api.onrender.com`. Free instances sleep after 15 minutes of inactivity, so the first request after idle takes ~30s; the web client retries reads automatically while it wakes.
 
-### 2. Frontend → GitHub Pages
+### 2. Frontend -> GitHub Pages
 
-Settings → **Pages** → Source: **GitHub Actions**.
+Settings -> **Pages** -> Source: **GitHub Actions**.
 
-Then add one repository variable: **Settings → Secrets and variables → Actions → Variables**
+Then add one repository variable: **Settings -> Secrets and variables -> Actions -> Variables**
 
 | Name | Value |
 |---|---|
@@ -95,42 +114,70 @@ Set it in the Render dashboard if you fork this to a different account.
 ## API surface
 
 ```
-POST   /api/auth/register            → token + user + workspaces
+POST   /api/auth/register             -> token + user + workspaces
 POST   /api/auth/login
-GET    /api/auth/me
+GET    /api/auth/me                   (rate limited: 10/min per client)
 
-GET    /api/workspaces               → memberships with counts
+GET    /api/health                    -> 200 only when the DB answers
+GET    /api/workspaces                -> memberships with counts
 POST   /api/workspaces
-GET    /api/workspaces/:id           → members, projects, statuses
-GET    /api/workspaces/:id/dashboard → counters, workload, activity
-GET    /api/workspaces/:id/tasks?scope=assigned|created|overdue|done
+GET    /api/workspaces/:id            -> members, projects, statuses
+GET    /api/workspaces/:id/dashboard  -> counters, workload, activity
+GET    /api/workspaces/:id/tasks?scope=assigned|created|overdue|done|deadlines
+GET    /api/workspaces/:id/workload?days=7|14|30
+GET    /api/workspaces/:id/search?q=
+GET    /api/workspaces/:id/backup     -> full JSON snapshot (admin)
+GET    /api/workspaces/:id/archived   -> archived projects (admin)
+GET    /api/workspaces/:id/stream?token=  -> SSE events
 POST   /api/workspaces/:id/members
 DELETE /api/workspaces/:id/members/:userId
+POST   /api/workspaces/:id/invites
+GET    /api/invites/:token
+POST   /api/invites/:token/accept
+DELETE /api/invites/:inviteId
+
+GET    /api/notifications?workspaceId=
+PATCH  /api/notifications/:id/read
+POST   /api/notifications/read-all?workspaceId=
 
 POST   /api/workspaces/:wid/projects
 GET    /api/projects/:id
 PATCH  /api/projects/:id
-DELETE /api/projects/:id             → archive
+DELETE /api/projects/:id              -> archive
+POST   /api/projects/:id/restore
+DELETE /api/projects/:id/permanent    -> only when archived (admin)
+PUT    /api/projects/:id/members      -> private-project guest list
+GET    /api/workspaces/:wid/templates
+POST   /api/projects/:id/templates
+DELETE /api/templates/:templateId
+GET    /api/projects/:id/export       -> { filename, csv }
+POST   /api/projects/:id/import       -> { created, skipped }
+GET    /api/projects/:id/dependencies
 POST   /api/projects/:id/statuses
 PATCH  /api/statuses/:statusId
 DELETE /api/statuses/:statusId
+GET    /api/projects/:id/fields
+POST   /api/projects/:id/fields
+PATCH  /api/fields/:fieldId
+DELETE /api/fields/:fieldId
 
-GET    /api/projects/:id/tasks?statusId&assigneeId&priority&q
+GET    /api/projects/:id/tasks?statusId&assigneeId&priority&q&tag
 POST   /api/projects/:id/tasks
 GET    /api/tasks/:id
+GET    /api/tasks/:id/history
 PATCH  /api/tasks/:id
-PATCH  /api/tasks/:id/move           → { statusId, position }
+PATCH  /api/tasks/:id/move           -> { statusId, position }
 DELETE /api/tasks/:id
 POST   /api/tasks/:id/comments
 DELETE /api/comments/:commentId
 POST   /api/tasks/:id/time
 ```
 
-Every route except `/api/health` and the two auth calls requires `Authorization: Bearer <token>`.
+Every route except `/api/health` and the two auth calls requires `Authorization: Bearer <token>`. All routes share a 300 req/min per-client ceiling unless a handler sets a tighter one.
 
 ## Data model
 
-`User` · `Workspace` · `Membership` (role) · `Project` · `Status` · `Task` (self-referencing for subtasks) · `Comment` · `TimeLog` · `Activity`
+`User` - `Workspace` - `Membership` (role) - `Project` - `Status` - `Task` (self-referencing for subtasks) - `Comment` - `TimeLog` - `Activity`, plus tags, checklists, custom fields, dependencies, templates, invites, notifications, and project guest lists.
 
 See `apps/api/prisma/schema.prisma`. Board ordering uses a `Float position` so a single task move writes one row.
 
