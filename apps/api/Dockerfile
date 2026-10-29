@@ -9,7 +9,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
-RUN npm ci
+RUN npm ci \
+ && mkdir -p apps/api/node_modules
 
 COPY apps/api apps/api
 RUN npx prisma generate --schema apps/api/prisma/schema.prisma \
