@@ -1,4 +1,7 @@
 import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
   IsEnum,
   IsISO8601,
   IsInt,
@@ -11,7 +14,7 @@ import {
   MinLength,
   ValidateIf,
 } from "class-validator";
-import { Priority } from "@prisma/client";
+import { Priority, RecurrenceRule } from "@prisma/client";
 
 export class CreateTaskDto {
   @IsString()
@@ -49,10 +52,10 @@ export class CreateTaskDto {
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
-  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsInt()
   @Min(0)
-  @Max(9999)
-  estimateHours?: number | null;
+  @Max(600000)
+  plannedMinutes?: number | null;
 
   @IsOptional()
   @IsString()
@@ -97,10 +100,10 @@ export class UpdateTaskDto {
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
-  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsInt()
   @Min(0)
-  @Max(9999)
-  estimateHours?: number | null;
+  @Max(600000)
+  plannedMinutes?: number | null;
 }
 
 export class MoveTaskDto {
@@ -128,4 +131,102 @@ export class LogTimeDto {
   @IsString()
   @MaxLength(280)
   note?: string;
+}
+
+export class SetTaskTagsDto {
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(32, { each: true })
+  tags!: string[];
+}
+
+export class CreateChecklistDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  title!: string;
+}
+
+export class UpdateChecklistDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  title!: string;
+}
+
+export class CreateChecklistItemDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  text!: string;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  assigneeId?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsISO8601()
+  dueDate?: string | null;
+}
+
+export class UpdateChecklistItemDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  text?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  done?: boolean;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  assigneeId?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsISO8601()
+  dueDate?: string | null;
+}
+
+export class AddObserverDto {
+  @IsString()
+  userId!: string;
+}
+
+export class CreateReminderDto {
+  @IsISO8601()
+  remindAt!: string;
+}
+
+export class AddDependencyDto {
+  @IsString()
+  dependsOnId!: string;
+}
+
+export class SetRecurrenceDto {
+  @IsEnum(RecurrenceRule)
+  rule!: RecurrenceRule;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(52)
+  interval?: number;
+}
+
+export class SetCustomValueDto {
+  @IsString()
+  fieldId!: string;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  @MaxLength(2000)
+  value?: string | null;
 }

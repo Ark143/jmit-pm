@@ -91,10 +91,33 @@ export function timeAgo(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function hoursLabel(hours: number | null, minutes: number) {
-  const logged = minutes > 0 ? `${(minutes / 60).toFixed(minutes % 60 === 0 ? 0 : 1)}h logged` : "No time logged";
-  if (!hours) return logged;
-  return `${logged} of ${hours}h`;
+export function fmtMinutes(total: number | null | undefined) {
+  if (total === null || total === undefined) return "—";
+  if (total <= 0) return "0m";
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  if (hours === 0) return `${minutes}m`;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+export function timeLabel(planned: number | null, logged: number) {
+  const loggedText = logged > 0 ? `${fmtMinutes(logged)} logged` : "No time logged";
+  if (!planned) return loggedText;
+  return `${loggedText} of ${fmtMinutes(planned)}`;
+}
+
+export function fmtBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function dayDiff(from: Date, to: Date) {
+  return Math.round((startOfDay(to).getTime() - startOfDay(from).getTime()) / DAY);
+}
+
+export function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * DAY);
 }
 
 export function monthMatrix(year: number, month: number) {

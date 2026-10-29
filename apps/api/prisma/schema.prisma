@@ -29,6 +29,21 @@ enum StatusCategory {
   DONE
 }
 
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  SELECT
+  CHECKBOX
+  URL
+}
+
+enum RecurrenceRule {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -37,12 +52,16 @@ model User {
   color        String   @default("#4f8cff")
   createdAt    DateTime @default(now())
 
-  memberships Membership[]
-  assignments Task[]       @relation("TaskAssignee")
-  createdTasks Task[]      @relation("TaskCreator")
-  comments    Comment[]
-  timeLogs    TimeLog[]
-  activities  Activity[]
+  memberships    Membership[]
+  assignments    Task[]          @relation("TaskAssignee")
+  createdTasks   Task[]          @relation("TaskCreator")
+  comments       Comment[]
+  timeLogs       TimeLog[]
+  activities     Activity[]
+  observers      TaskObserver[]
+  checklistItems ChecklistItem[]
+  reminders      Reminder[]
+  filters        FilterPreset[]
 }
 
 model Workspace {
@@ -53,6 +72,8 @@ model Workspace {
   memberships Membership[]
   projects    Project[]
   activities  Activity[]
+  tags        Tag[]
+  filters     FilterPreset[]
 }
 
 model Membership {
@@ -79,9 +100,10 @@ model Project {
   archived     Boolean  @default(false)
   createdAt    DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  statuses  Status[]
-  tasks     Task[]
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  statuses     Status[]
+  tasks        Task[]
+  customFields CustomField[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -101,23 +123,23 @@ model Status {
 }
 
 model Task {
-  id            String    @id @default(cuid())
-  projectId     String
-  number        Int
-  title         String
-  description   String?
-  statusId      String
-  priority      Priority  @default(MEDIUM)
-  assigneeId    String?
-  creatorId     String
-  parentId      String?
-  position      Float     @default(0)
-  startDate     DateTime?
-  dueDate       DateTime?
-  estimateHours Float?
-  completedAt   DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  projectId      String
+  number         Int
+  title          String
+  description    String?
+  statusId       String
+  priority       Priority  @default(MEDIUM)
+  assigneeId     String?
+  creatorId      String
+  parentId       String?
+  position       Float     @default(0)
+  startDate      DateTime?
+  dueDate        DateTime?
+  plannedMinutes Int?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   status   Status   @relation(fields: [statusId], references: [id])
@@ -126,8 +148,21 @@ model Task {
   parent   Task?    @relation("SubTasks", fields: [parentId], references: [id], onDelete: Cascade)
   subtasks Task[]   @relation("SubTasks")
 
-  comments Comment[]
-  timeLogs TimeLog[]
+  comments   Comment[]
+  timeLogs   TimeLog[]
+  tags       TaskTag[]
+  checklists Checklist[]
+  observers  TaskObserver[]
+  reminders  Reminder[]
+  attachments Attachment[]
+  customValues CustomFieldValue[]
+
+  // Rows where this task is the dependent one (this task waits on dependsOnId).
+  blockedBy TaskDependency[] @relation("DependentTask")
+  // Rows where this task is what others wait on.
+  blocks    TaskDependency[] @relation("BlockingTask")
+
+  recurrence Recurrence?
 
   @@unique([projectId, number])
   @@index([projectId, statusId])
@@ -175,4 +210,158 @@ model Activity {
   actor     User      @relation(fields: [actorId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
+}
+
+model Tag {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  color       String   @default("#8b93a1")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks     TaskTag[]
+
+  @@unique([workspaceId, name])
+}
+
+model TaskTag {
+  taskId String
+  tagId  String
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, tagId])
+  @@index([tagId])
+}
+
+model Checklist {
+  id       String @id @default(cuid())
+  taskId   String
+  title    String
+  position Int    @default(0)
+
+  task  Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  items ChecklistItem[]
+
+  @@index([taskId])
+}
+
+model ChecklistItem {
+  id          String    @id @default(cuid())
+  checklistId String
+  text        String
+  done        Boolean   @default(false)
+  assigneeId  String?
+  dueDate     DateTime?
+  position    Int       @default(0)
+
+  checklist Checklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  assignee  User?     @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([checklistId])
+}
+
+model TaskObserver {
+  taskId String
+  userId String
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId])
+}
+
+model Reminder {
+  id        String    @id @default(cuid())
+  taskId    String
+  userId    String
+  remindAt  DateTime
+  dismissed Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, remindAt])
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  taskId    String
+  name      String
+  mime      String
+  size      Int
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+model TaskDependency {
+  id          String @id @default(cuid())
+  taskId      String
+  dependsOnId String
+
+  task      Task @relation("DependentTask", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task @relation("BlockingTask", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnId])
+  @@index([dependsOnId])
+}
+
+model Recurrence {
+  id       String         @id @default(cuid())
+  taskId   String         @unique
+  rule     RecurrenceRule
+  interval Int            @default(1)
+  nextAt   DateTime?
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model CustomField {
+  id        String          @id @default(cuid())
+  projectId String
+  name      String
+  type      CustomFieldType @default(TEXT)
+  options   String[]        @default([])
+  position  Int             @default(0)
+
+  project Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  values  CustomFieldValue[]
+
+  @@index([projectId])
+}
+
+model CustomFieldValue {
+  id      String @id @default(cuid())
+  fieldId String
+  taskId  String
+  value   String?
+
+  field CustomField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  task  Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([fieldId, taskId])
+  @@index([taskId])
+}
+
+model FilterPreset {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  projectId   String?
+  name        String
+  state       Json
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, userId])
 }

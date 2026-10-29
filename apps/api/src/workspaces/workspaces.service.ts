@@ -1,8 +1,14 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Priority, Role, StatusCategory } from "@prisma/client";
 import { AccessService } from "../common/access.service";
 import { PrismaService } from "../prisma/prisma.service";
-import { AddMemberDto, CreateWorkspaceDto } from "./workspaces.dto";
+import {
+  AddMemberDto,
+  CreateFilterDto,
+  CreateTagDto,
+  CreateWorkspaceDto,
+  UpdateFilterDto,
+} from "./workspaces.dto";
 
 const DEFAULT_STATUSES: Array<{ name: string; category: StatusCategory }> = [
   { name: "To do", category: StatusCategory.TODO },
@@ -193,7 +199,7 @@ export class WorkspacesService {
       status: { category: { not: StatusCategory.DONE } },
     } as const;
 
-    const [open, overdue, dueThisWeek, completedThisWeek, byPriority, byStatus, upcoming, activity, members] =
+    const [open, overdue, dueThisWeek, completedThisWeek, byPriority, byStatus, upcoming, activity, members, reminders] =
       await Promise.all([
         this.prisma.task.count({ where: openWhere }),
         this.prisma.task.count({
@@ -239,6 +245,22 @@ export class WorkspacesService {
           where: { workspaceId },
           include: { user: { select: USER_FIELDS } },
         }),
+        this.prisma.reminder.findMany({
+          where: { userId, dismissed: false, task: { project: { workspaceId, archived: false } } },
+          orderBy: { remindAt: "asc" },
+          take: 12,
+          include: {
+            task: {
+              select: {
+                id: true,
+                number: true,
+                title: true,
+                dueDate: true,
+                project: { select: { id: true, name: true, key: true, color: true } },
+              },
+            },
+          },
+        }),
       ]);
 
     const workloadRows = await this.prisma.task.groupBy({
@@ -283,7 +305,103 @@ export class WorkspacesService {
         createdAt: a.createdAt,
         actor: a.actor,
       })),
+      reminders: reminders.map((r) => ({
+        id: r.id,
+        remindAt: r.remindAt,
+        task: r.task,
+      })),
     };
+  }
+
+  // ── Tags ────────────────────────────────────────────────────────────────
+
+  async listTags(userId: string, workspaceId: string) {
+    await this.access.requireWorkspace(userId, workspaceId);
+
+    return this.prisma.tag.findMany({
+      where: { workspaceId },
+      orderBy: { name: "asc" },
+      include: { _count: { select: { tasks: true } } },
+    });
+  }
+
+  async createTag(userId: string, workspaceId: string, dto: CreateTagDto) {
+    await this.access.requireWorkspace(userId, workspaceId);
+    const name = dto.name.trim();
+
+    const clash = await this.prisma.tag.findFirst({
+      where: { workspaceId, name: { equals: name, mode: "insensitive" } },
+    });
+    if (clash) throw new ConflictException(`The tag ${name} already exists`);
+
+    return this.prisma.tag.create({
+      data: { workspaceId, name, color: dto.color ?? "#8b93a1" },
+    });
+  }
+
+  async removeTag(userId: string, tagId: string) {
+    const tag = await this.prisma.tag.findUnique({ where: { id: tagId } });
+    if (!tag) throw new NotFoundException("Tag not found");
+
+    await this.access.requireWorkspace(userId, tag.workspaceId);
+    await this.prisma.tag.delete({ where: { id: tagId } });
+
+    return { ok: true };
+  }
+
+  // ── Saved filters ───────────────────────────────────────────────────────
+
+  async listFilters(userId: string, workspaceId: string, projectId?: string) {
+    await this.access.requireWorkspace(userId, workspaceId);
+
+    return this.prisma.filterPreset.findMany({
+      where: { workspaceId, userId, ...(projectId ? { projectId } : {}) },
+      orderBy: { createdAt: "asc" },
+    });
+  }
+
+  async createFilter(userId: string, workspaceId: string, dto: CreateFilterDto) {
+    await this.access.requireWorkspace(userId, workspaceId);
+
+    if (dto.projectId) {
+      const project = await this.prisma.project.findFirst({
+        where: { id: dto.projectId, workspaceId },
+        select: { id: true },
+      });
+      if (!project) throw new BadRequestException("That project is not in this workspace");
+    }
+
+    return this.prisma.filterPreset.create({
+      data: {
+        workspaceId,
+        userId,
+        projectId: dto.projectId ?? null,
+        name: dto.name.trim(),
+        state: dto.state,
+      },
+    });
+  }
+
+  async updateFilter(userId: string, presetId: string, dto: UpdateFilterDto) {
+    const preset = await this.prisma.filterPreset.findUnique({ where: { id: presetId } });
+    if (!preset) throw new NotFoundException("Saved filter not found");
+    if (preset.userId !== userId) throw new BadRequestException("That saved filter is not yours");
+
+    await this.access.requireWorkspace(userId, preset.workspaceId);
+
+    return this.prisma.filterPreset.update({
+      where: { id: presetId },
+      data: { name: dto.name?.trim(), state: dto.state },
+    });
+  }
+
+  async removeFilter(userId: string, presetId: string) {
+    const preset = await this.prisma.filterPreset.findUnique({ where: { id: presetId } });
+    if (!preset) throw new NotFoundException("Saved filter not found");
+    if (preset.userId !== userId) throw new BadRequestException("That saved filter is not yours");
+
+    await this.prisma.filterPreset.delete({ where: { id: presetId } });
+    return { ok: true };
   }
 
   /** Called on sign-up: one workspace, one project, three illustrative tasks. */

@@ -1,10 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
-import { StatusCategory } from "@prisma/client";
+import { CustomFieldType, StatusCategory } from "@prisma/client";
 import { AccessService } from "../common/access.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
+  CreateCustomFieldDto,
   CreateProjectDto,
   CreateStatusDto,
+  UpdateCustomFieldDto,
   UpdateProjectDto,
   UpdateStatusDto,
 } from "./projects.dto";
@@ -55,7 +57,7 @@ export class ProjectsService {
   async detail(userId: string, projectId: string) {
     const { project } = await this.access.requireProject(userId, projectId);
 
-    const [statuses, counts] = await Promise.all([
+    const [statuses, counts, customFields] = await Promise.all([
       this.prisma.status.findMany({
         where: { projectId },
         orderBy: { position: "asc" },
@@ -64,6 +66,10 @@ export class ProjectsService {
         by: ["statusId"],
         where: { projectId },
         _count: { _all: true },
+      }),
+      this.prisma.customField.findMany({
+        where: { projectId },
+        orderBy: [{ position: "asc" }, { name: "asc" }],
       }),
     ]);
 
@@ -78,6 +84,7 @@ export class ProjectsService {
       description: project.description,
       createdAt: project.createdAt,
       statuses: statuses.map((s) => ({ ...s, taskCount: countByStatus.get(s.id) ?? 0 })),
+      customFields,
       taskCount: statuses.reduce((sum, s) => sum + (countByStatus.get(s.id) ?? 0), 0),
     };
   }
@@ -167,4 +174,89 @@ export class ProjectsService {
 
     return { ok: true };
   }
+
+  // ── Custom fields ───────────────────────────────────────────────────────
+
+  async listFields(userId: string, projectId: string) {
+    await this.access.requireProject(userId, projectId);
+
+    return this.prisma.customField.findMany({
+      where: { projectId },
+      orderBy: [{ position: "asc" }, { name: "asc" }],
+    });
+  }
+
+  async addField(userId: string, projectId: string, dto: CreateCustomFieldDto) {
+    const { workspaceId } = await this.access.requireProject(userId, projectId);
+    const name = dto.name.trim();
+
+    if (dto.type === CustomFieldType.SELECT && (dto.options ?? []).length === 0) {
+      throw new BadRequestException("A dropdown field needs at least one option");
+    }
+
+    const clash = await this.prisma.customField.findFirst({
+      where: { projectId, name: { equals: name, mode: "insensitive" } },
+    });
+    if (clash) throw new ConflictException(`This project already has a field called ${name}`);
+
+    const last = await this.prisma.customField.findFirst({
+      where: { projectId },
+      orderBy: { position: "desc" },
+      select: { position: true },
+    });
+
+    const field = await this.prisma.customField.create({
+      data: {
+        projectId,
+        name,
+        type: dto.type,
+        options: cleanOptions(dto.options),
+        position: (last?.position ?? -1) + 1,
+      },
+    });
+
+    await this.access.log(workspaceId, userId, "field.create", `added field ${field.name}`);
+    return field;
+  }
+
+  async updateField(userId: string, fieldId: string, dto: UpdateCustomFieldDto) {
+    const field = await this.prisma.customField.findUnique({ where: { id: fieldId } });
+    if (!field) throw new NotFoundException("Field not found");
+
+    const { workspaceId } = await this.access.requireProject(userId, field.projectId);
+
+    const nextType = dto.type ?? field.type;
+    const nextOptions = dto.options === undefined ? field.options : cleanOptions(dto.options);
+    if (nextType === CustomFieldType.SELECT && nextOptions.length === 0) {
+      throw new BadRequestException("A dropdown field needs at least one option");
+    }
+
+    const updated = await this.prisma.customField.update({
+      where: { id: fieldId },
+      data: {
+        name: dto.name?.trim(),
+        type: dto.type,
+        options: dto.options === undefined ? undefined : nextOptions,
+        position: dto.position,
+      },
+    });
+
+    await this.access.log(workspaceId, userId, "field.update", `updated field ${updated.name}`);
+    return updated;
+  }
+
+  async removeField(userId: string, fieldId: string) {
+    const field = await this.prisma.customField.findUnique({ where: { id: fieldId } });
+    if (!field) throw new NotFoundException("Field not found");
+
+    const { workspaceId } = await this.access.requireProject(userId, field.projectId);
+    await this.prisma.customField.delete({ where: { id: fieldId } });
+    await this.access.log(workspaceId, userId, "field.delete", `removed field ${field.name}`);
+
+    return { ok: true };
+  }
+}
+
+function cleanOptions(options?: string[]) {
+  return [...new Set((options ?? []).map((o) => o.trim()).filter(Boolean))];
 }

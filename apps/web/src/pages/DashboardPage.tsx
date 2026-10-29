@@ -171,6 +171,58 @@ export function DashboardPage({ workspace }: { workspace: WorkspaceDetail }) {
 
         <section className="card card--wide">
           <header className="card__head">
+            <h2>Reminders</h2>
+            <span className="card__hint">your scheduled nudges</span>
+          </header>
+          {data.reminders.length === 0 ? (
+            <p className="hint">No reminders set. Open a task and add one.</p>
+          ) : (
+            <ul className="reminder-list">
+              {data.reminders.map((reminder) => {
+                const late = new Date(reminder.remindAt) <= new Date();
+                return (
+                  <li key={reminder.id}>
+                    <span className={`reminder-list__when ${late ? "due--late" : ""}`}>
+                      {new Date(reminder.remindAt).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                    <Link to={`/p/${reminder.task.project.id}`} className="task-rows__link reminder-list__task">
+                      <span className="mono" style={{ color: reminder.task.project.color }}>
+                        {reminder.task.project.key}-{reminder.task.number}
+                      </span>
+                      <span className="task-rows__title">{reminder.task.title}</span>
+                    </Link>
+                    <button
+                      type="button"
+                      className="btn btn--sm"
+                      onClick={() => {
+                        void api.tasks.dismissReminder(reminder.id).then(() => {
+                          setData((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  reminders: current.reminders.filter((entry) => entry.id !== reminder.id),
+                                }
+                              : current,
+                          );
+                        });
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
+        <section className="card card--wide">
+          <header className="card__head">
             <h2>Activity</h2>
             <span className="card__hint">latest across the workspace</span>
           </header>

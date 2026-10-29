@@ -2,8 +2,10 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from "@n
 import { AuthUser } from "../auth/auth.types";
 import { CurrentUser, JwtAuthGuard } from "../auth/jwt-auth.guard";
 import {
+  CreateCustomFieldDto,
   CreateProjectDto,
   CreateStatusDto,
+  UpdateCustomFieldDto,
   UpdateProjectDto,
   UpdateStatusDto,
 } from "./projects.dto";
@@ -55,5 +57,35 @@ export class ProjectsController {
   @Delete("statuses/:statusId")
   removeStatus(@CurrentUser() user: AuthUser, @Param("statusId") statusId: string) {
     return this.projects.removeStatus(user.userId, statusId);
+  }
+
+  // ── Custom fields ───────────────────────────────────────────────────────
+
+  @Get("projects/:id/fields")
+  listFields(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.projects.listFields(user.userId, id);
+  }
+
+  @Post("projects/:id/fields")
+  addField(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() dto: CreateCustomFieldDto,
+  ) {
+    return this.projects.addField(user.userId, id, dto);
+  }
+
+  @Patch("fields/:fieldId")
+  updateField(
+    @CurrentUser() user: AuthUser,
+    @Param("fieldId") fieldId: string,
+    @Body() dto: UpdateCustomFieldDto,
+  ) {
+    return this.projects.updateField(user.userId, fieldId, dto);
+  }
+
+  @Delete("fields/:fieldId")
+  removeField(@CurrentUser() user: AuthUser, @Param("fieldId") fieldId: string) {
+    return this.projects.removeField(user.userId, fieldId);
   }
 }

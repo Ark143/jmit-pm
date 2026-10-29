@@ -22,7 +22,7 @@ async function bootstrap() {
 
   app.enableCors({
     origin: origins.length > 0 ? origins : true,
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   });
 

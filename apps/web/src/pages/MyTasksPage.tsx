@@ -9,6 +9,7 @@ const SCOPES = [
   { id: "assigned", label: "Assigned to me" },
   { id: "created", label: "Created by me" },
   { id: "overdue", label: "Overdue" },
+  { id: "deadlines", label: "Deadlines" },
   { id: "done", label: "Completed" },
 ] as const;
 
