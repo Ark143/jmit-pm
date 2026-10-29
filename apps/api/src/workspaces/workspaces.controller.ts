@@ -53,6 +53,16 @@ export class WorkspacesController {
     return this.workspaces.workload(user.userId, id, days);
   }
 
+  @Get("workspaces/:id/backup")
+  backup(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.workspaces.backup(user.userId, id);
+  }
+
+  @Get("workspaces/:id/archived")
+  archived(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.workspaces.archivedProjects(user.userId, id);
+  }
+
   @Post("workspaces/:id/members")
   addMember(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: AddMemberDto) {
     return this.workspaces.addMember(user.userId, id, dto);

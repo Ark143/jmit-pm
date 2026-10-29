@@ -5,7 +5,7 @@ import { ApiError } from "../api";
 import { ErrorNote } from "../ui";
 
 export function LoginPage() {
-  const { login, register } = useAuth();
+  const { login, register, sessionExpired } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -52,6 +52,12 @@ export function LoginPage() {
 
       <section className="auth__panel">
         <form className="card auth__form" onSubmit={onSubmit}>
+          {sessionExpired ? (
+            <p className="notice notice--warn" role="status">
+              Your session ended. Sign in again to pick up where you left off.
+            </p>
+          ) : null}
+
           <div className="tabs" role="tablist">
             <button
               type="button"

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { PRIORITY_META, avatarColor, initials } from "./lib";
 import type { Priority, User } from "./types";
@@ -47,6 +47,13 @@ export function Spinner({ label }: { label?: string }) {
   );
 }
 
+// Modals can stack (project settings opening a confirm, for example), so the
+// page scroll lock is reference counted instead of blindly toggled.
+let openModals = 0;
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Modal({
   open,
   onClose,
@@ -60,24 +67,84 @@ export function Modal({
   children: ReactNode;
   width?: number;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+
+    openModals += 1;
+    document.body.classList.add("modal-open");
+
+    const focusable = (): HTMLElement[] => {
+      const panel = panelRef.current;
+      if (!panel) return [];
+      return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (element) => element.offsetParent !== null,
+      );
     };
+
+    // Land on the first real field when the dialog is a form, otherwise on the
+    // panel itself so screen readers announce the title.
+    const fields = focusable().filter((element) =>
+      element.matches("input, textarea, select"),
+    );
+    (fields[0] ?? focusable()[0] ?? panelRef.current)?.focus();
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const items = focusable();
+      if (items.length === 0) {
+        event.preventDefault();
+        panelRef.current?.focus();
+        return;
+      }
+
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+
+      if (event.shiftKey && (active === first || active === panelRef.current)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !panelRef.current?.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      openModals = Math.max(0, openModals - 1);
+      if (openModals === 0) document.body.classList.remove("modal-open");
+      if (previouslyFocused && document.contains(previouslyFocused)) {
+        previouslyFocused.focus();
+      }
+    };
+  }, [open]);
 
   if (!open) return null;
 
   return (
     <div className="scrim" role="presentation" onMouseDown={onClose}>
       <div
+        ref={panelRef}
         className="modal"
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         style={{ maxWidth: width }}
         onMouseDown={(event) => event.stopPropagation()}
       >

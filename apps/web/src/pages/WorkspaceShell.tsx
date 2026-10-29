@@ -6,6 +6,7 @@ import { publishLive, useLiveRefresh } from "../live";
 import { Avatar, EmptyState, Spinner } from "../ui";
 import type { WorkspaceDetail } from "../types";
 import { DashboardPage } from "./DashboardPage";
+import { ArchivedProjectsModal } from "./ArchivedProjectsModal";
 import { MembersModal } from "./MembersModal";
 import { MyTasksPage } from "./MyTasksPage";
 import { NewProjectModal } from "./NewProjectModal";
@@ -33,6 +34,8 @@ export function WorkspaceShell() {
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [online, setOnline] = useState(() => navigator.onLine);
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!activeWorkspaceId) return;
@@ -55,6 +58,18 @@ export function WorkspaceShell() {
   useEffect(() => {
     setNavOpen(false);
   }, [location.pathname]);
+
+  // Losing the network is common on mobile; saying so beats a silent spinner.
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
 
   // One stream per open workspace. EventSource reconnects by itself; the
   // 700ms debounce in useLiveRefresh keeps bursts down to one refetch.
@@ -94,6 +109,16 @@ export function WorkspaceShell() {
 
   return (
     <div className="shell">
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
+
+      {!online ? (
+        <p className="offline-bar" role="status">
+          You're offline. Changes can't be saved until the connection is back.
+        </p>
+      ) : null}
+
       <aside className={`sidebar ${navOpen ? "is-open" : ""}`} aria-label="Workspace navigation">
         <div className="sidebar__head">
           <span className="brand">
@@ -190,6 +215,15 @@ export function WorkspaceShell() {
         </ul>
 
         <div className="sidebar__foot">
+          {workspace && (workspace.role === "OWNER" || workspace.role === "ADMIN") ? (
+            <button type="button" className="nav__item" onClick={() => setArchivedOpen(true)}>
+              <span className="nav__icon" aria-hidden="true">
+                ▤
+              </span>
+              Archived
+            </button>
+          ) : null}
+
           <button type="button" className="nav__item" onClick={() => setMembersOpen(true)}>
             <span className="nav__icon" aria-hidden="true">
               ⚇
@@ -213,7 +247,7 @@ export function WorkspaceShell() {
         </div>
       </aside>
 
-      <main className="main">
+      <main className="main" id="main-content" tabIndex={-1}>
         <header className="topbar">
           <button
             type="button"
@@ -298,6 +332,15 @@ export function WorkspaceShell() {
         workspace={workspace}
         onClose={() => setMembersOpen(false)}
         onChanged={load}
+      />
+
+      <ArchivedProjectsModal
+        open={archivedOpen}
+        workspaceId={activeWorkspaceId}
+        onClose={() => setArchivedOpen(false)}
+        onRestored={async () => {
+          await Promise.all([load(), refreshWorkspaces()]);
+        }}
       />
 
       <NewProjectModal

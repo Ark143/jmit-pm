@@ -156,6 +156,9 @@ export class ProjectsService {
     if (dto.visibility !== undefined && dto.visibility !== project.visibility) {
       await this.access.requireAdmin(userId, workspaceId);
     }
+    if (dto.archived !== undefined && dto.archived !== project.archived) {
+      await this.access.requireAdmin(userId, workspaceId);
+    }
 
     const updated = await this.prisma.project.update({
       where: { id: projectId },
@@ -196,6 +199,21 @@ export class ProjectsService {
     this.events.emit(workspaceId, "project.changed");
 
     return { ok: true };
+  }
+
+  /** Undo an archive. Nothing was deleted, so this only flips the flag back. */
+  async restore(userId: string, projectId: string) {
+    const { project, workspaceId } = await this.access.requireProject(userId, projectId);
+    await this.access.requireAdmin(userId, workspaceId);
+
+    const restored = await this.prisma.project.update({
+      where: { id: projectId },
+      data: { archived: false },
+    });
+    await this.access.log(workspaceId, userId, "project.restore", `restored project ${project.name}`);
+    this.events.emit(workspaceId, "project.changed");
+
+    return restored;
   }
 
   // ── Privacy: who can open a private project ─────────────────────────────

@@ -218,6 +218,7 @@ model Task {
 
   @@unique([projectId, number])
   @@index([projectId, statusId])
+  @@index([projectId, dueDate])
   @@index([assigneeId])
   @@index([parentId])
 }
@@ -262,6 +263,7 @@ model Activity {
   actor     User      @relation(fields: [actorId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
+  @@index([taskId, createdAt])
 }
 
 model Tag {
@@ -459,5 +461,6 @@ model Notification {
   task      Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt])
+  @@index([userId, workspaceId, createdAt])
   @@index([workspaceId, createdAt])
 }

@@ -56,6 +56,17 @@ export interface Member {
   user: User;
 }
 
+/** Row in the admin-only archived project list. */
+export interface ArchivedProject {
+  id: string;
+  name: string;
+  key: string;
+  color: string;
+  visibility: ProjectVisibility;
+  createdAt: string;
+  _count: { tasks: number };
+}
+
 export interface WorkspaceDetail {
   id: string;
   name: string;

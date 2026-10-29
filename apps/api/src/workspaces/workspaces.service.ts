@@ -709,6 +709,137 @@ export class WorkspacesService {
     };
   }
 
+  // ── Durability: backups and archived projects ───────────────────────────
+
+  /**
+   * A single JSON document with everything an owner would need to rebuild the
+   * workspace. Attachment bytes are intentionally left out (they can be large
+   * and are not restorable through this endpoint), but their metadata is kept
+   * so nothing silently disappears from the inventory.
+   */
+  async backup(userId: string, workspaceId: string) {
+    await this.access.requireAdmin(userId, workspaceId);
+
+    const [workspace, tags, templates, filters, projects, activity] = await Promise.all([
+      this.prisma.workspace.findUniqueOrThrow({
+        where: { id: workspaceId },
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          memberships: {
+            orderBy: { createdAt: "asc" },
+            select: {
+              role: true,
+              createdAt: true,
+              user: { select: { id: true, name: true, email: true, color: true } },
+            },
+          },
+          invites: {
+            orderBy: { createdAt: "asc" },
+            select: {
+              email: true,
+              role: true,
+              status: true,
+              expiresAt: true,
+              createdAt: true,
+            },
+          },
+        },
+      }),
+      this.prisma.tag.findMany({ where: { workspaceId }, orderBy: { name: "asc" } }),
+      this.prisma.projectTemplate.findMany({ where: { workspaceId }, orderBy: { createdAt: "asc" } }),
+      this.prisma.filterPreset.findMany({ where: { workspaceId }, orderBy: { createdAt: "asc" } }),
+      this.prisma.project.findMany({
+        where: { workspaceId },
+        orderBy: { createdAt: "asc" },
+        include: {
+          statuses: { orderBy: { position: "asc" } },
+          customFields: { orderBy: [{ position: "asc" }, { name: "asc" }] },
+          members: { select: { userId: true } },
+          tasks: {
+            orderBy: { number: "asc" },
+            include: {
+              comments: {
+                orderBy: { createdAt: "asc" },
+                select: { body: true, createdAt: true, author: { select: { email: true } } },
+              },
+              timeLogs: {
+                orderBy: { createdAt: "asc" },
+                select: { minutes: true, note: true, createdAt: true, user: { select: { email: true } } },
+              },
+              tags: { select: { tag: { select: { name: true } } } },
+              checklists: {
+                orderBy: { position: "asc" },
+                include: { items: { orderBy: { position: "asc" } } },
+              },
+              observers: { select: { user: { select: { email: true } } } },
+              reminders: {
+                select: { remindAt: true, dismissed: true, user: { select: { email: true } } },
+              },
+              attachments: { select: { name: true, mime: true, size: true, createdAt: true } },
+              customValues: {
+                select: { value: true, field: { select: { name: true } } },
+              },
+              blockedBy: { select: { dependsOn: { select: { number: true } } } },
+              recurrence: true,
+            },
+          },
+        },
+      }),
+      this.prisma.activity.findMany({
+        where: { workspaceId },
+        orderBy: { createdAt: "asc" },
+        take: 5000,
+        select: {
+          type: true,
+          message: true,
+          taskId: true,
+          createdAt: true,
+          actor: { select: { email: true } },
+        },
+      }),
+    ]);
+
+    return {
+      filename: `jmit-backup-${workspace.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workspace"}.json`,
+      json: JSON.stringify(
+        {
+          format: "jmit-workspace-backup",
+          version: 1,
+          generatedAt: new Date().toISOString(),
+          note: "Attachment bytes are not included; size and name are recorded.",
+          workspace,
+          tags,
+          templates,
+          filters,
+          projects,
+          activity,
+        },
+        null,
+        2,
+      ),
+    };
+  }
+
+  async archivedProjects(userId: string, workspaceId: string) {
+    await this.access.requireAdmin(userId, workspaceId);
+
+    return this.prisma.project.findMany({
+      where: { workspaceId, archived: true },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        key: true,
+        color: true,
+        visibility: true,
+        createdAt: true,
+        _count: { select: { tasks: true } },
+      },
+    });
+  }
+
   // ── Tags ────────────────────────────────────────────────────────────────
 
   async listTags(userId: string, workspaceId: string) {

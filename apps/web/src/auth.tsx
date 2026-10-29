@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { api, tokenStore } from "./api";
+import { api, onUnauthorized, tokenStore } from "./api";
 import type { SessionUser, WorkspaceRef } from "./types";
 
 const WORKSPACE_KEY = "jmit.workspace";
@@ -10,6 +10,8 @@ interface AuthContextValue {
   user: SessionUser | null;
   workspaces: WorkspaceRef[];
   activeWorkspaceId: string | null;
+  /** True when the last session ended because the API rejected its token. */
+  sessionExpired: boolean;
   setActiveWorkspace: (id: string) => void;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
@@ -26,6 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
     localStorage.getItem(WORKSPACE_KEY),
   );
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const applySession = useCallback((payload: { user: SessionUser; workspaces: WorkspaceRef[] }) => {
     setUser(payload.user);
@@ -59,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (email: string, password: string) => {
       const session = await api.auth.login({ email, password });
       tokenStore.set(session.token);
+      setSessionExpired(false);
       applySession(session);
     },
     [applySession],
@@ -68,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (name: string, email: string, password: string) => {
       const session = await api.auth.register({ name, email, password });
       tokenStore.set(session.token);
+      setSessionExpired(false);
       applySession(session);
     },
     [applySession],
@@ -80,6 +85,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setWorkspaces([]);
     setActiveWorkspaceId(null);
     setStatus("anon");
+    setSessionExpired(false);
+  }, []);
+
+  // Any API call that comes back 401 drops the session and explains why on the
+  // sign-in screen, instead of leaving a shell full of error states.
+  useEffect(() => {
+    return onUnauthorized(() => {
+      setUser(null);
+      setWorkspaces([]);
+      setActiveWorkspaceId(null);
+      setStatus("anon");
+      setSessionExpired(true);
+    });
   }, []);
 
   const refreshWorkspaces = useCallback(async () => {
@@ -98,13 +116,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       workspaces,
       activeWorkspaceId,
+      sessionExpired,
       setActiveWorkspace,
       login,
       register,
       logout,
       refreshWorkspaces,
     }),
-    [status, user, workspaces, activeWorkspaceId, setActiveWorkspace, login, register, logout, refreshWorkspaces],
+    [
+      status,
+      user,
+      workspaces,
+      activeWorkspaceId,
+      sessionExpired,
+      setActiveWorkspace,
+      login,
+      register,
+      logout,
+      refreshWorkspaces,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

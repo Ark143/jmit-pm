@@ -43,6 +43,11 @@ export class ProjectsController {
     return this.projects.remove(user.userId, id);
   }
 
+  @Post("projects/:id/restore")
+  restore(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.projects.restore(user.userId, id);
+  }
+
   // ── Privacy, templates and CSV ──────────────────────────────────────────
 
   @Put("projects/:id/members")

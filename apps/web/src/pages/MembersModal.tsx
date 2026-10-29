@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { ApiError, api } from "../api";
+import { ApiError, api, saveTextFile } from "../api";
 import { useAuth } from "../auth";
 import { Avatar, ErrorNote, Modal } from "../ui";
 import type { Role, WorkspaceDetail, WorkspaceInvite } from "../types";
@@ -34,6 +34,8 @@ export function MembersModal({
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupNote, setBackupNote] = useState<string | null>(null);
 
   const workspaceId = workspace?.id ?? null;
   const canManage = workspace?.role === "OWNER" || workspace?.role === "ADMIN";
@@ -97,6 +99,21 @@ export function MembersModal({
       await onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not remove that person");
+    }
+  }
+
+  async function downloadBackup() {
+    if (!workspace) return;
+    setBackupBusy(true);
+    setBackupNote(null);
+    try {
+      const { filename, json } = await api.workspaces.backup(workspace.id);
+      saveTextFile(filename, json);
+      setBackupNote("Backup downloaded.");
+    } catch (err) {
+      setBackupNote(err instanceof ApiError ? err.message : "Could not build the backup");
+    } finally {
+      setBackupBusy(false);
     }
   }
 
@@ -207,6 +224,29 @@ export function MembersModal({
               </ul>
             </section>
           ) : null}
+
+          <section className="backup-box">
+            <h3>Data &amp; backups</h3>
+            <p className="hint">
+              Download a JSON snapshot of this workspace — projects, tasks, comments, time logs, and
+              settings. Attachment files are listed but not bundled.
+            </p>
+            <div className="row">
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => void downloadBackup()}
+                disabled={backupBusy}
+              >
+                {backupBusy ? "Preparing…" : "Download backup"}
+              </button>
+              {backupNote ? (
+                <span className="hint" role="status">
+                  {backupNote}
+                </span>
+              ) : null}
+            </div>
+          </section>
         </>
       ) : (
         <p className="hint">Only owners and admins can manage members.</p>

@@ -1,4 +1,5 @@
 import type {
+  ArchivedProject,
   AttachmentItem,
   Checklist,
   ChecklistItem,
@@ -77,13 +78,76 @@ function errorMessage(data: unknown, status: number) {
   );
 }
 
+// ── Session expiry ────────────────────────────────────────────────────────
+// A 401 from any call means the stored token is dead (expired, revoked, or the
+// database was reset). Rather than let every page show its own error, the app
+// subscribes once and is dropped back to the sign-in screen.
+
+type UnauthorizedListener = () => void;
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+export function onUnauthorized(listener: UnauthorizedListener) {
+  unauthorizedListeners.add(listener);
+  return () => {
+    unauthorizedListeners.delete(listener);
+  };
+}
+
+function notifyUnauthorized() {
+  if (!tokenStore.get()) return;
+  tokenStore.clear();
+  for (const listener of unauthorizedListeners) listener();
+}
+
+// ── Retries ───────────────────────────────────────────────────────────────
+// The free API host sleeps when idle and answers 502/503/504 while it boots.
+// Reads are safe to repeat, so they get a few quick attempts before an error.
+
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 700;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const attempts = method === "GET" ? RETRY_ATTEMPTS : 1;
+
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      const retryable = RETRYABLE_STATUS.has(response.status);
+      if (retryable && attempt < attempts - 1) {
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) await sleep(RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+
+  throw lastError ?? new Error("Network request failed");
+}
+
+function unreachableMessage() {
+  return `Can't reach the API at ${BASE}. The free server may still be waking up — wait ~30 seconds and try again.`;
+}
+
 async function request<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${BASE}${path}`, {
+    response = await fetchWithRetry(`${BASE}${path}`, {
       method: options.method ?? "GET",
       headers: {
         "Content-Type": "application/json",
@@ -92,10 +156,7 @@ async function request<T>(
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch {
-    throw new ApiError(
-      `Can't reach the API at ${BASE}. If this is a fresh deployment, the backend has not been started yet.`,
-      0,
-    );
+    throw new ApiError(unreachableMessage(), 0);
   }
 
   if (response.status === 204) return undefined as T;
@@ -104,7 +165,7 @@ async function request<T>(
   const data = text ? safeJson(text) : null;
 
   if (!response.ok) {
-    if (response.status === 401 && tokenStore.get()) tokenStore.clear();
+    if (response.status === 401) notifyUnauthorized();
     throw new ApiError(errorMessage(data, response.status), response.status);
   }
 
@@ -123,12 +184,12 @@ async function upload<T>(path: string, file: File): Promise<T> {
       body: form,
     });
   } catch {
-    throw new ApiError("Can't reach the API right now.", 0);
+    throw new ApiError("Can't reach the API right now. Try again in a moment.", 0);
   }
 
   const data = safeJson(await response.text());
   if (!response.ok) {
-    if (response.status === 401 && tokenStore.get()) tokenStore.clear();
+    if (response.status === 401) notifyUnauthorized();
     throw new ApiError(errorMessage(data, response.status), response.status);
   }
 
@@ -136,12 +197,28 @@ async function upload<T>(path: string, file: File): Promise<T> {
 }
 
 export async function downloadFile(path: string, filename: string) {
-  const response = await fetch(`${BASE}${path}`, { headers: authHeaders() });
+  let response: Response;
+  try {
+    response = await fetchWithRetry(`${BASE}${path}`, { headers: authHeaders() });
+  } catch {
+    throw new ApiError(unreachableMessage(), 0);
+  }
+
   if (!response.ok) {
-    throw new ApiError(`Could not download ${filename}`, response.status);
+    if (response.status === 401) notifyUnauthorized();
+    throw new ApiError(`Could not download ${filename} (${response.status})`, response.status);
   }
 
   const blob = await response.blob();
+  saveBlob(blob, filename);
+}
+
+/** Saves text the API already returned in a JSON envelope (backups, CSV). */
+export function saveTextFile(filename: string, text: string, mime = "application/json") {
+  saveBlob(new Blob([text], { type: mime }), filename);
+}
+
+function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -149,7 +226,7 @@ export async function downloadFile(path: string, filename: string) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function safeJson(text: string): unknown {
@@ -200,6 +277,8 @@ export const api = {
       request<SearchResults>(`/workspaces/${id}/search?q=${encodeURIComponent(q)}`),
     workload: (id: string, days = 14) =>
       request<WorkloadData>(`/workspaces/${id}/workload?days=${days}`),
+    backup: (id: string) => request<{ filename: string; json: string }>(`/workspaces/${id}/backup`),
+    archived: (id: string) => request<ArchivedProject[]>(`/workspaces/${id}/archived`),
     tasks: (id: string, scope: TaskScope) =>
       request<TaskWithProject[]>(`/workspaces/${id}/tasks?scope=${scope}`),
     tags: (id: string) => request<Tag[]>(`/workspaces/${id}/tags`),
@@ -271,6 +350,7 @@ export const api = {
       },
     ) => request<ProjectSummary>(`/projects/${id}`, { method: "PATCH", body }),
     remove: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: "DELETE" }),
+    restore: (id: string) => request<ProjectSummary>(`/projects/${id}/restore`, { method: "POST" }),
     setMembers: (id: string, userIds: string[]) =>
       request<Member["user"][]>(`/projects/${id}/members`, { method: "PUT", body: { userIds } }),
     templates: (workspaceId: string) =>
