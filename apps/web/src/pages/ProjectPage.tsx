@@ -657,6 +657,20 @@ export function ProjectPage({
   );
 }
 
+/**
+ * A task with only a due date still deserves a visible bar, so it is drawn as a
+ * two-day band that ends on the due date. Same idea when only a start date exists.
+ */
+function barRange(task: TaskListItem): { start: Date; end: Date } {
+  const due = task.dueDate ? startOfDay(new Date(task.dueDate)) : null;
+  const start = task.startDate ? startOfDay(new Date(task.startDate)) : null;
+
+  if (start && due) return due < start ? { start, end: start } : { start, end: due };
+  if (start) return { start, end: addDays(start, 1) };
+  const end = due as Date;
+  return { start: addDays(end, -1), end };
+}
+
 function GanttView({
   tasks,
   projectKey,
@@ -677,10 +691,10 @@ function GanttView({
     );
   }
 
-  const starts = dated.map((task) => startOfDay(new Date(task.startDate ?? (task.dueDate as string))));
-  const ends = dated.map((task) => startOfDay(new Date(task.dueDate ?? (task.startDate as string))));
-  const min = addDays(new Date(Math.min(...starts.map((d) => d.getTime()))), -1);
-  const rawMax = new Date(Math.max(...ends.map((d) => d.getTime())));
+  const ranges = new Map(dated.map((task) => [task.id, barRange(task)]));
+  const allRanges = [...ranges.values()];
+  const min = addDays(new Date(Math.min(...allRanges.map((r) => r.start.getTime()))), -1);
+  const rawMax = new Date(Math.max(...allRanges.map((r) => r.end.getTime())));
   const max = addDays(rawMax, 2);
   const totalDays = Math.min(120, Math.max(3, dayDiff(min, max) + 1));
   const todayIndex = dayDiff(min, new Date());
@@ -705,10 +719,9 @@ function GanttView({
           })}
 
           {dated.map((task) => {
-            const start = startOfDay(new Date(task.startDate ?? (task.dueDate as string)));
-            const end = startOfDay(new Date(task.dueDate ?? (task.startDate as string)));
-            const from = Math.max(1, dayDiff(min, start) + 1);
-            const to = Math.min(totalDays, Math.max(from, dayDiff(min, end) + 1));
+            const range = ranges.get(task.id) as { start: Date; end: Date };
+            const from = Math.max(1, dayDiff(min, range.start) + 1);
+            const to = Math.min(totalDays, Math.max(from, dayDiff(min, range.end) + 1));
             const tag = task.tags[0];
 
             return (

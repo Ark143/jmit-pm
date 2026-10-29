@@ -508,12 +508,26 @@ export function TaskPanel({
                           key={item.id}
                           item={item}
                           members={members}
-                          onToggle={(done) =>
-                            run(
+                          onToggle={(done) => {
+                            // Flip it locally first so a slow round-trip never looks broken.
+                            setTask((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    checklists: current.checklists.map((list) => ({
+                                      ...list,
+                                      items: list.items.map((entry) =>
+                                        entry.id === item.id ? { ...entry, done } : entry,
+                                      ),
+                                    })),
+                                  }
+                                : current,
+                            );
+                            void run(
                               () => api.tasks.updateChecklistItem(item.id, { done }),
                               "Could not update the item",
-                            )
-                          }
+                            );
+                          }}
                           onAssign={(assigneeId) =>
                             run(
                               () => api.tasks.updateChecklistItem(item.id, { assigneeId }),
