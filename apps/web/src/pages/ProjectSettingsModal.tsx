@@ -134,7 +134,12 @@ export function ProjectSettingsModal({
               value="PRIVATE"
               checked={visibility === "PRIVATE"}
               disabled={!canManage}
-              onChange={() => setVisibility("PRIVATE")}
+              onChange={() => {
+                setVisibility("PRIVATE");
+                // Keep the person making the switch on the guest list, otherwise
+                // they would have to remember to tick their own name.
+                if (memberIds.length === 0 && user) setMemberIds([user.id]);
+              }}
             />
             <span>
               <strong>Only selected people</strong>
