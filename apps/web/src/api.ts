@@ -8,7 +8,9 @@ import type {
   CustomFieldValue,
   DashboardData,
   FilterPreset,
+  InvitePreview,
   Member,
+  NotificationFeed,
   Priority,
   ProjectDetail,
   ProjectSummary,
@@ -16,16 +18,19 @@ import type {
   RecurrenceRule,
   ReminderItem,
   Role,
+  SearchResults,
   SessionPayload,
   SessionUser,
   Status,
   StatusCategory,
   Tag,
   TaskDetail,
+  TaskHistoryEntry,
   TaskListItem,
   TaskWithProject,
   TimeLogItem,
   WorkspaceDetail,
+  WorkspaceInvite,
   WorkspaceListItem,
   WorkspaceRef,
 } from "./types";
@@ -50,6 +55,12 @@ export const tokenStore = {
 function authHeaders(): Record<string, string> {
   const token = tokenStore.get();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** EventSource can't set headers, so the stream takes the same token as a query param. */
+export function workspaceStreamUrl(workspaceId: string) {
+  const token = tokenStore.get() ?? "";
+  return `${BASE}/workspaces/${workspaceId}/stream?token=${encodeURIComponent(token)}`;
 }
 
 function errorMessage(data: unknown, status: number) {
@@ -178,6 +189,11 @@ export const api = {
       request<Member>(`/workspaces/${id}/members`, { method: "POST", body }),
     removeMember: (id: string, userId: string) =>
       request<{ ok: boolean }>(`/workspaces/${id}/members/${userId}`, { method: "DELETE" }),
+    invites: (id: string) => request<WorkspaceInvite[]>(`/workspaces/${id}/invites`),
+    createInvite: (id: string, body: { email: string; role?: Role }) =>
+      request<WorkspaceInvite>(`/workspaces/${id}/invites`, { method: "POST", body }),
+    search: (id: string, q: string) =>
+      request<SearchResults>(`/workspaces/${id}/search?q=${encodeURIComponent(q)}`),
     tasks: (id: string, scope: TaskScope) =>
       request<TaskWithProject[]>(`/workspaces/${id}/tasks?scope=${scope}`),
     tags: (id: string) => request<Tag[]>(`/workspaces/${id}/tags`),
@@ -197,6 +213,27 @@ export const api = {
       request<FilterPreset>(`/filters/${presetId}`, { method: "PATCH", body }),
     removeFilter: (presetId: string) =>
       request<{ ok: boolean }>(`/filters/${presetId}`, { method: "DELETE" }),
+  },
+
+  invites: {
+    preview: (token: string) => request<InvitePreview>(`/invites/${token}`),
+    accept: (token: string) =>
+      request<{ workspace: { id: string; name: string }; role: Role }>(`/invites/${token}/accept`, {
+        method: "POST",
+      }),
+    revoke: (inviteId: string) =>
+      request<{ ok: boolean }>(`/invites/${inviteId}`, { method: "DELETE" }),
+  },
+
+  notifications: {
+    list: (workspaceId: string) =>
+      request<NotificationFeed>(`/notifications?workspaceId=${workspaceId}`),
+    markRead: (id: string) =>
+      request<{ ok: boolean }>(`/notifications/${id}/read`, { method: "PATCH" }),
+    markAllRead: (workspaceId: string) =>
+      request<{ ok: boolean }>(`/notifications/read-all?workspaceId=${workspaceId}`, {
+        method: "POST",
+      }),
   },
 
   projects: {
@@ -241,6 +278,7 @@ export const api = {
     create: (projectId: string, body: CreateTaskInput) =>
       request<TaskDetail>(`/projects/${projectId}/tasks`, { method: "POST", body }),
     get: (id: string) => request<TaskDetail>(`/tasks/${id}`),
+    history: (id: string) => request<TaskHistoryEntry[]>(`/tasks/${id}/history`),
     update: (
       id: string,
       body: {

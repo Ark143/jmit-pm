@@ -12,6 +12,7 @@ import type {
   RecurrenceRule,
   Status,
   TaskDetail,
+  TaskHistoryEntry,
   TaskListItem,
 } from "../types";
 
@@ -35,6 +36,7 @@ export function TaskPanel({
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [projectTasks, setProjectTasks] = useState<TaskListItem[]>([]);
+  const [history, setHistory] = useState<TaskHistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -64,12 +66,14 @@ export function TaskPanel({
       setPlanned(detail.plannedMinutes === null ? "" : String(detail.plannedMinutes));
       setRecurrenceRule(detail.recurrence?.rule ?? "WEEKLY");
       setRecurrenceInterval(String(detail.recurrence?.interval ?? 1));
-      const [project, siblings] = await Promise.all([
+      const [project, siblings, log] = await Promise.all([
         api.projects.get(detail.project.id),
         api.tasks.list(detail.project.id),
+        api.tasks.history(taskId).catch(() => [] as TaskHistoryEntry[]),
       ]);
       setStatuses(project.statuses);
       setProjectTasks(siblings);
+      setHistory(log);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load the task");
     }
@@ -78,6 +82,7 @@ export function TaskPanel({
   useEffect(() => {
     setTask(null);
     setError(null);
+    setHistory([]);
     setTagInput("");
     setChecklistDraft("");
     setItemDrafts({});
@@ -901,6 +906,34 @@ export function TaskPanel({
                     ))}
                   </ul>
                 ) : null}
+              </section>
+
+              <section className="drawer__section">
+                <h3>
+                  History <span className="pill">{history.length}</span>
+                </h3>
+                {history.length === 0 ? (
+                  <p className="hint">No changes recorded yet.</p>
+                ) : (
+                  <ul className="history">
+                    {history.map((entry) => (
+                      <li key={entry.id}>
+                        <Avatar user={entry.actor} size={20} />
+                        <p>
+                          <strong>{entry.actor.name}</strong> {entry.message}
+                        </p>
+                        <time dateTime={entry.createdAt}>
+                          {new Date(entry.createdAt).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </time>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </section>
 
               <section className="drawer__section">

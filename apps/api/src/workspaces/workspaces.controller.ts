@@ -35,6 +35,15 @@ export class WorkspacesController {
     return this.workspaces.dashboard(user.userId, id);
   }
 
+  @Get("workspaces/:id/search")
+  search(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Query("q") q = "",
+  ) {
+    return this.workspaces.search(user.userId, id, q);
+  }
+
   @Post("workspaces/:id/members")
   addMember(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: AddMemberDto) {
     return this.workspaces.addMember(user.userId, id, dto);

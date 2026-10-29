@@ -26,6 +26,15 @@ export class AddMemberDto {
   role?: Role;
 }
 
+export class CreateInviteDto {
+  @IsEmail()
+  email!: string;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+}
+
 export class CreateTagDto {
   @IsString()
   @MinLength(1)

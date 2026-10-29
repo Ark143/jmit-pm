@@ -1,6 +1,8 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { Priority, RecurrenceRule, Role, StatusCategory } from "@prisma/client";
 import { AccessService } from "../common/access.service";
+import { EventsService } from "../events/events.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   AddDependencyDto,
@@ -42,6 +44,8 @@ export class TasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: AccessService,
+    private readonly notifications: NotificationsService,
+    private readonly events: EventsService,
   ) {}
 
   async list(userId: string, projectId: string, filters: TaskFilters) {
@@ -126,6 +130,17 @@ export class TasksService {
       task.id,
     );
 
+    await this.notifications.notify({
+      workspaceId,
+      actorId: userId,
+      userIds: [task.assigneeId],
+      taskId: task.id,
+      type: "task.assigned",
+      title: `You were assigned ${project.key}-${task.number}`,
+      body: task.title,
+    });
+    this.events.emit(workspaceId, "task.created", task.id);
+
     return this.detail(userId, task.id);
   }
 
@@ -202,6 +217,18 @@ export class TasksService {
     };
   }
 
+  /** Change log for a single task, newest first. */
+  async history(userId: string, taskId: string) {
+    await this.access.requireTask(userId, taskId);
+
+    return this.prisma.activity.findMany({
+      where: { taskId },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: { actor: { select: USER_FIELDS } },
+    });
+  }
+
   async update(userId: string, taskId: string, dto: UpdateTaskDto) {
     const { task, workspaceId, project } = await this.access.requireTask(userId, taskId);
 
@@ -269,9 +296,35 @@ export class TasksService {
       );
     }
 
+    const assigneeChanged =
+      dto.assigneeId !== undefined && dto.assigneeId !== task.assigneeId && dto.assigneeId !== null;
+
+    if (assigneeChanged) {
+      await this.notifications.notify({
+        workspaceId,
+        actorId: userId,
+        userIds: [updated.assigneeId],
+        taskId,
+        type: "task.assigned",
+        title: `You were assigned ${project.key}-${task.number}`,
+        body: updated.title,
+      });
+    }
+
     if (!wasDone && updated.completedAt) {
+      await this.notifications.notify({
+        workspaceId,
+        actorId: userId,
+        userIds: await this.taskAudience(taskId),
+        taskId,
+        type: "task.done",
+        title: `${project.key}-${task.number} was completed`,
+        body: updated.title,
+      });
       await this.spawnNextOccurrence(userId, taskId);
     }
+
+    this.events.emit(workspaceId, "task.changed", taskId);
 
     return updated;
   }
@@ -311,8 +364,19 @@ export class TasksService {
     }
 
     if (!wasDone && updated.completedAt) {
+      await this.notifications.notify({
+        workspaceId,
+        actorId: userId,
+        userIds: await this.taskAudience(taskId),
+        taskId,
+        type: "task.done",
+        title: `${project.key}-${task.number} was completed`,
+        body: updated.title,
+      });
       await this.spawnNextOccurrence(userId, taskId);
     }
+
+    this.events.emit(workspaceId, "task.changed", taskId);
 
     return updated;
   }
@@ -327,6 +391,7 @@ export class TasksService {
       "task.delete",
       `deleted ${project.key}-${task.number}: ${task.title}`,
     );
+    this.events.emit(workspaceId, "task.deleted", taskId);
 
     return { ok: true };
   }
@@ -346,6 +411,17 @@ export class TasksService {
       `commented on ${project.key}-${task.number}`,
       taskId,
     );
+
+    await this.notifications.notify({
+      workspaceId,
+      actorId: userId,
+      userIds: await this.taskAudience(taskId),
+      taskId,
+      type: "task.comment",
+      title: `New comment on ${project.key}-${task.number}`,
+      body: dto.body.trim().slice(0, 160),
+    });
+    this.events.emit(workspaceId, "task.comment", taskId);
 
     return comment;
   }
@@ -448,6 +524,8 @@ export class TasksService {
       `tagged ${project.key}-${task.number}${names.length ? ` as ${names.join(", ")}` : ""}`,
       taskId,
     );
+
+    this.events.emit(workspaceId, "task.changed", taskId);
 
     return this.detail(userId, taskId);
   }
@@ -579,6 +657,17 @@ export class TasksService {
       `added an observer to ${project.key}-${task.number}`,
       taskId,
     );
+
+    await this.notifications.notify({
+      workspaceId,
+      actorId: userId,
+      userIds: [dto.userId],
+      taskId,
+      type: "task.watch",
+      title: `You are watching ${project.key}-${task.number}`,
+      body: task.title,
+    });
+    this.events.emit(workspaceId, "task.changed", taskId);
 
     return this.detail(userId, taskId);
   }
@@ -757,6 +846,25 @@ export class TasksService {
   }
 
   // ── Internals ───────────────────────────────────────────────────────────
+
+  /** Everyone who should hear about activity on a task: assignee, creator, watchers. */
+  private async taskAudience(taskId: string) {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        assigneeId: true,
+        creatorId: true,
+        observers: { select: { userId: true } },
+      },
+    });
+    if (!task) return [];
+
+    return [
+      task.assigneeId,
+      task.creatorId,
+      ...task.observers.map((observer) => observer.userId),
+    ];
+  }
 
   private async assertAssignee(workspaceId: string, assigneeId?: string | null) {
     if (!assigneeId) return;

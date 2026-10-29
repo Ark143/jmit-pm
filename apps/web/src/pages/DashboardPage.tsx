@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { PRIORITY_META, dueLabel, isOverdue, timeAgo } from "../lib";
+import { useLiveRefresh } from "../live";
 import { Avatar, EmptyState, PriorityBadge, Spinner } from "../ui";
 import type { DashboardData, WorkspaceDetail } from "../types";
 
@@ -9,24 +10,21 @@ export function DashboardPage({ workspace }: { workspace: WorkspaceDetail }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setData(null);
-    setError(null);
-
-    api.workspaces
-      .dashboard(workspace.id)
-      .then((result) => {
-        if (!cancelled) setData(result);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : "Could not load the dashboard");
-      });
-
-    return () => {
-      cancelled = true;
-    };
+  const load = useCallback(async () => {
+    try {
+      setError(null);
+      setData(await api.workspaces.dashboard(workspace.id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not load the dashboard");
+    }
   }, [workspace.id]);
+
+  useEffect(() => {
+    setData(null);
+    void load();
+  }, [load]);
+
+  useLiveRefresh(() => void load());
 
   if (error) {
     return <EmptyState title="Dashboard unavailable" body={error} />;

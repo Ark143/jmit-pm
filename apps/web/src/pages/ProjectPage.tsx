@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
 import {
@@ -14,6 +14,7 @@ import {
   startOfDay,
   toDateInput,
 } from "../lib";
+import { useLiveRefresh } from "../live";
 import { Avatar, EmptyState, Modal, PriorityBadge, Spinner } from "../ui";
 import type {
   CustomFieldType,
@@ -55,6 +56,7 @@ export function ProjectPage({
   onWorkspaceChange: () => void;
 }) {
   const { projectId } = useParams<{ projectId: string }>();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
 
   const [project, setProject] = useState<ProjectDetail | null>(null);
@@ -111,6 +113,14 @@ export function ProjectPage({
     setActivePreset(null);
     void load();
   }, [load]);
+
+  // Notification and search links carry the task to open.
+  useEffect(() => {
+    const linkedTask = searchParams.get("task");
+    if (linkedTask) setOpenTaskId(linkedTask);
+  }, [searchParams]);
+
+  useLiveRefresh(() => void load());
 
   const filtered = useMemo(() => {
     if (!tasks) return [];

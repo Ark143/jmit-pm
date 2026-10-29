@@ -80,6 +80,11 @@ export class TasksController {
     return this.tasks.detail(user.userId, id);
   }
 
+  @Get("tasks/:id/history")
+  history(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.tasks.history(user.userId, id);
+  }
+
   @Patch("tasks/:id")
   update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() dto: UpdateTaskDto) {
     return this.tasks.update(user.userId, id, dto);

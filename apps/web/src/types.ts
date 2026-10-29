@@ -299,3 +299,76 @@ export interface SessionPayload {
   user: SessionUser;
   workspaces: WorkspaceRef[];
 }
+
+export interface InvitePreview {
+  workspaceId: string;
+  workspaceName: string;
+  inviterName: string;
+  email: string;
+  role: Role;
+  status: "PENDING" | "ACCEPTED" | "REVOKED";
+  expiresAt: string;
+}
+
+export interface WorkspaceInvite {
+  id: string;
+  workspaceId: string;
+  email: string;
+  role: Role;
+  token: string;
+  status: "PENDING" | "ACCEPTED" | "REVOKED";
+  invitedById: string;
+  acceptedById: string | null;
+  expiresAt: string;
+  createdAt: string;
+  invitedBy: User;
+}
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  workspaceId: string;
+  actorId: string | null;
+  taskId: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  readAt: string | null;
+  createdAt: string;
+  actor: Pick<User, "id" | "name" | "color"> | null;
+  task: {
+    id: string;
+    number: number;
+    title: string;
+    project: Pick<ProjectSummary, "id" | "key" | "color">;
+  } | null;
+}
+
+export interface NotificationFeed {
+  items: AppNotification[];
+  unread: number;
+}
+
+export interface TaskHistoryEntry {
+  id: string;
+  type: string;
+  message: string;
+  taskId: string | null;
+  createdAt: string;
+  actor: User;
+}
+
+export interface SearchResults {
+  tasks: Array<{
+    id: string;
+    number: number;
+    title: string;
+    priority: Priority;
+    dueDate: string | null;
+    assignee: User | null;
+    status: Pick<Status, "id" | "name" | "category">;
+    project: Pick<ProjectSummary, "id" | "name" | "key" | "color">;
+  }>;
+  projects: Array<Pick<ProjectSummary, "id" | "name" | "key" | "color">>;
+  tags: Tag[];
+}

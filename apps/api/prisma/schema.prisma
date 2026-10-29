@@ -44,6 +44,12 @@ enum RecurrenceRule {
   MONTHLY
 }
 
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -62,6 +68,10 @@ model User {
   checklistItems ChecklistItem[]
   reminders      Reminder[]
   filters        FilterPreset[]
+  invitesSent     WorkspaceInvite[] @relation("InvitesSent")
+  invitesAccepted WorkspaceInvite[] @relation("InvitesAccepted")
+  notifications   Notification[]    @relation("Notifications")
+  actedNotifications Notification[] @relation("NotificationsActor")
 }
 
 model Workspace {
@@ -74,6 +84,8 @@ model Workspace {
   activities  Activity[]
   tags        Tag[]
   filters     FilterPreset[]
+  invites     WorkspaceInvite[]
+  notifications Notification[]
 }
 
 model Membership {
@@ -163,6 +175,7 @@ model Task {
   blocks    TaskDependency[] @relation("BlockingTask")
 
   recurrence Recurrence?
+  notifications Notification[]
 
   @@unique([projectId, number])
   @@index([projectId, statusId])
@@ -280,6 +293,7 @@ model Reminder {
   userId    String
   remindAt  DateTime
   dismissed Boolean   @default(false)
+  notifiedAt DateTime?
   createdAt DateTime  @default(now())
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
@@ -364,4 +378,47 @@ model FilterPreset {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, userId])
+}
+
+/// A shareable link that lets someone join a workspace without an existing account.
+model WorkspaceInvite {
+  id           String       @id @default(cuid())
+  workspaceId  String
+  email        String
+  role         Role         @default(MEMBER)
+  token        String       @unique
+  status       InviteStatus @default(PENDING)
+  invitedById  String
+  acceptedById String?
+  expiresAt    DateTime
+  createdAt    DateTime     @default(now())
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy  User      @relation("InvitesSent", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedBy User?     @relation("InvitesAccepted", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([email])
+}
+
+/// Per-user inbox entry. One row per person per event, so read state stays personal.
+model Notification {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String
+  actorId     String?
+  taskId      String?
+  type        String
+  title       String
+  body        String?
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  user      User      @relation("Notifications", fields: [userId], references: [id], onDelete: Cascade)
+  actor     User?     @relation("NotificationsActor", fields: [actorId], references: [id], onDelete: SetNull)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([workspaceId, createdAt])
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, api } from "../api";
 import { dueLabel, isOverdue } from "../lib";
+import { useLiveRefresh } from "../live";
 import { Avatar, EmptyState, PriorityBadge, Spinner } from "../ui";
 import type { TaskWithProject, WorkspaceDetail } from "../types";
 import { TaskPanel } from "./TaskPanel";
@@ -35,6 +36,8 @@ export function MyTasksPage({ workspace }: { workspace: WorkspaceDetail }) {
     setTasks(null);
     void load();
   }, [load]);
+
+  useLiveRefresh(() => void load());
 
   return (
     <div className="page">

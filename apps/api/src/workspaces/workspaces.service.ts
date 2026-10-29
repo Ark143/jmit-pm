@@ -1,10 +1,14 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Priority, Role, StatusCategory } from "@prisma/client";
+import { randomBytes } from "crypto";
 import { AccessService } from "../common/access.service";
+import { EventsService } from "../events/events.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   AddMemberDto,
   CreateFilterDto,
+  CreateInviteDto,
   CreateTagDto,
   CreateWorkspaceDto,
   UpdateFilterDto,
@@ -23,6 +27,8 @@ export class WorkspacesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: AccessService,
+    private readonly notifications: NotificationsService,
+    private readonly events: EventsService,
   ) {}
 
   async listForUser(userId: string) {
@@ -147,7 +153,9 @@ export class WorkspacesService {
       select: USER_FIELDS,
     });
     if (!target) {
-      throw new NotFoundException("No account uses that email yet — ask them to sign up first");
+      throw new NotFoundException(
+        "No account uses that email yet — send an invite instead and they can join from the link",
+      );
     }
 
     const existing = await this.prisma.membership.findUnique({
@@ -161,6 +169,16 @@ export class WorkspacesService {
     });
 
     await this.access.log(workspaceId, userId, "member.add", `added ${target.name} to the workspace`);
+    this.events.emit(workspaceId, "member.changed");
+
+    await this.notifications.notify({
+      workspaceId,
+      actorId: userId,
+      userIds: [target.id],
+      type: "member.add",
+      title: "You were added to a workspace",
+      body: "Open it from the workspace switcher to see the projects.",
+    });
 
     return { role: membership.role, joinedAt: membership.createdAt, user: membership.user };
   }
@@ -183,8 +201,216 @@ export class WorkspacesService {
 
     await this.prisma.membership.delete({ where: { id: membership.id } });
     await this.access.log(workspaceId, userId, "member.remove", `removed ${membership.user.name}`);
+    this.events.emit(workspaceId, "member.changed");
 
     return { ok: true };
+  }
+
+  // ── Invitations ─────────────────────────────────────────────────────────
+
+  async listInvites(userId: string, workspaceId: string) {
+    await this.access.requireAdmin(userId, workspaceId);
+
+    return this.prisma.workspaceInvite.findMany({
+      where: { workspaceId, status: "PENDING" },
+      orderBy: { createdAt: "desc" },
+      include: { invitedBy: { select: USER_FIELDS } },
+    });
+  }
+
+  async createInvite(userId: string, workspaceId: string, dto: CreateInviteDto) {
+    await this.access.requireAdmin(userId, workspaceId);
+
+    const email = dto.email.trim().toLowerCase();
+    const role = dto.role ?? Role.MEMBER;
+    if (role === Role.OWNER) {
+      throw new BadRequestException("Invite as admin or member, then promote them");
+    }
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, name: true },
+    });
+    if (existingUser) {
+      const member = await this.prisma.membership.findUnique({
+        where: { userId_workspaceId: { userId: existingUser.id, workspaceId } },
+      });
+      if (member) {
+        throw new BadRequestException(`${existingUser.name} is already in this workspace`);
+      }
+    }
+
+    // One live link per address: re-inviting replaces the old one.
+    await this.prisma.workspaceInvite.updateMany({
+      where: { workspaceId, email, status: "PENDING" },
+      data: { status: "REVOKED" },
+    });
+
+    const invite = await this.prisma.workspaceInvite.create({
+      data: {
+        workspaceId,
+        email,
+        role,
+        token: randomBytes(24).toString("base64url"),
+        invitedById: userId,
+        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      },
+      include: { invitedBy: { select: USER_FIELDS } },
+    });
+
+    await this.access.log(workspaceId, userId, "invite.create", `invited ${email}`);
+
+    return invite;
+  }
+
+  async revokeInvite(userId: string, inviteId: string) {
+    const invite = await this.prisma.workspaceInvite.findUnique({ where: { id: inviteId } });
+    if (!invite) throw new NotFoundException("Invite not found");
+
+    await this.access.requireAdmin(userId, invite.workspaceId);
+    await this.prisma.workspaceInvite.update({
+      where: { id: inviteId },
+      data: { status: "REVOKED" },
+    });
+
+    return { ok: true };
+  }
+
+  /** Public: someone opening the join link before signing in still sees what it is. */
+  async previewInvite(token: string) {
+    const invite = await this.prisma.workspaceInvite.findUnique({
+      where: { token },
+      include: {
+        workspace: { select: { id: true, name: true } },
+        invitedBy: { select: { name: true } },
+      },
+    });
+    if (!invite) throw new NotFoundException("That invite link is not valid");
+
+    return {
+      workspaceId: invite.workspace.id,
+      workspaceName: invite.workspace.name,
+      inviterName: invite.invitedBy.name,
+      email: invite.email,
+      role: invite.role,
+      status: invite.status,
+      expiresAt: invite.expiresAt,
+    };
+  }
+
+  async acceptInvite(userId: string, token: string) {
+    const invite = await this.prisma.workspaceInvite.findUnique({ where: { token } });
+    if (!invite) throw new NotFoundException("That invite link is not valid");
+
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { id: true, name: true, email: true },
+    });
+
+    if (user.email.toLowerCase() !== invite.email.toLowerCase()) {
+      throw new BadRequestException(
+        `This invite is for ${invite.email}. Sign in with that address to join.`,
+      );
+    }
+
+    if (invite.status === "REVOKED") {
+      throw new BadRequestException("That invite was cancelled — ask for a new link");
+    }
+    if (invite.status === "PENDING" && invite.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException("That invite expired — ask for a new link");
+    }
+
+    const existing = await this.prisma.membership.findUnique({
+      where: { userId_workspaceId: { userId, workspaceId: invite.workspaceId } },
+    });
+
+    if (!existing) {
+      await this.prisma.membership.create({
+        data: { userId, workspaceId: invite.workspaceId, role: invite.role },
+      });
+    }
+
+    if (invite.status !== "ACCEPTED") {
+      await this.prisma.workspaceInvite.update({
+        where: { id: invite.id },
+        data: { status: "ACCEPTED", acceptedById: userId },
+      });
+      await this.access.log(invite.workspaceId, userId, "member.join", `${user.name} joined the workspace`);
+
+      const admins = await this.prisma.membership.findMany({
+        where: { workspaceId: invite.workspaceId, role: { in: [Role.OWNER, Role.ADMIN] } },
+        select: { userId: true },
+      });
+
+      await this.notifications.notify({
+        workspaceId: invite.workspaceId,
+        actorId: userId,
+        userIds: admins.map((row) => row.userId),
+        type: "member.join",
+        title: `${user.name} joined the workspace`,
+        body: user.email,
+      });
+      this.events.emit(invite.workspaceId, "member.changed");
+    }
+
+    const workspace = await this.prisma.workspace.findUniqueOrThrow({
+      where: { id: invite.workspaceId },
+      select: { id: true, name: true },
+    });
+
+    return { workspace: { id: workspace.id, name: workspace.name }, role: invite.role };
+  }
+
+  // ── Search ──────────────────────────────────────────────────────────────
+
+  async search(userId: string, workspaceId: string, rawQuery: string) {
+    await this.access.requireWorkspace(userId, workspaceId);
+
+    const term = rawQuery.trim();
+    if (term.length < 2) {
+      return { tasks: [], projects: [], tags: [] };
+    }
+
+    const [tasks, projects, tags] = await Promise.all([
+      this.prisma.task.findMany({
+        where: {
+          project: { workspaceId, archived: false },
+          OR: [
+            { title: { contains: term, mode: "insensitive" } },
+            { description: { contains: term, mode: "insensitive" } },
+            { comments: { some: { body: { contains: term, mode: "insensitive" } } } },
+          ],
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 20,
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          priority: true,
+          dueDate: true,
+          assignee: { select: USER_FIELDS },
+          status: { select: { id: true, name: true, category: true } },
+          project: { select: { id: true, name: true, key: true, color: true } },
+        },
+      }),
+      this.prisma.project.findMany({
+        where: {
+          workspaceId,
+          archived: false,
+          name: { contains: term, mode: "insensitive" },
+        },
+        take: 8,
+        select: { id: true, name: true, key: true, color: true },
+      }),
+      this.prisma.tag.findMany({
+        where: { workspaceId, name: { contains: term, mode: "insensitive" } },
+        take: 8,
+        include: { _count: { select: { tasks: true } } },
+      }),
+    ]);
+
+    return { tasks, projects, tags };
   }
 
   async dashboard(userId: string, workspaceId: string) {

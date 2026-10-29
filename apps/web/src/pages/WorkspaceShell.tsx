@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { ApiError, api } from "../api";
+import { ApiError, api, workspaceStreamUrl } from "../api";
 import { useAuth } from "../auth";
+import { publishLive, useLiveRefresh } from "../live";
 import { Avatar, EmptyState, Spinner } from "../ui";
 import type { WorkspaceDetail } from "../types";
 import { DashboardPage } from "./DashboardPage";
 import { MembersModal } from "./MembersModal";
 import { MyTasksPage } from "./MyTasksPage";
 import { NewProjectModal } from "./NewProjectModal";
+import { NotificationBell } from "./NotificationBell";
 import { ProjectPage } from "./ProjectPage";
+import { SearchPage } from "./SearchPage";
 
 export function WorkspaceShell() {
   const {
@@ -28,6 +31,7 @@ export function WorkspaceShell() {
   const [membersOpen, setMembersOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [search, setSearch] = useState("");
 
   const load = useCallback(async () => {
     if (!activeWorkspaceId) return;
@@ -50,6 +54,26 @@ export function WorkspaceShell() {
   useEffect(() => {
     setNavOpen(false);
   }, [location.pathname]);
+
+  // One stream per open workspace. EventSource reconnects by itself; the
+  // 700ms debounce in useLiveRefresh keeps bursts down to one refetch.
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+
+    const source = new EventSource(workspaceStreamUrl(activeWorkspaceId));
+    source.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as { type?: string };
+        if (payload.type && payload.type !== "ping") publishLive(payload.type);
+      } catch {
+        // Heartbeats and anything unexpected are safe to ignore.
+      }
+    };
+
+    return () => source.close();
+  }, [activeWorkspaceId]);
+
+  useLiveRefresh(() => void load());
 
   if (!activeWorkspaceId || workspaces.length === 0) {
     return (
@@ -192,7 +216,27 @@ export function WorkspaceShell() {
           <div className="topbar__crumb">
             <span className="topbar__workspace">{workspace?.name ?? "Workspace"}</span>
           </div>
+
+          <form
+            className="topbar__search"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const q = search.trim();
+              if (q.length < 2) return;
+              navigate(`/search?q=${encodeURIComponent(q)}`);
+            }}
+          >
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search tasks, projects, tags…"
+              aria-label="Search this workspace"
+            />
+          </form>
+
           <div className="topbar__actions">
+            <NotificationBell workspaceId={activeWorkspaceId} />
             {workspace && workspace.members.length > 1 ? (
               <div className="avatar-stack">
                 {workspace.members.slice(0, 4).map((member) => (
@@ -227,6 +271,7 @@ export function WorkspaceShell() {
             <Routes>
               <Route path="/" element={<DashboardPage workspace={workspace} />} />
               <Route path="/tasks" element={<MyTasksPage workspace={workspace} />} />
+              <Route path="/search" element={<SearchPage workspace={workspace} />} />
               <Route
                 path="/p/:projectId"
                 element={<ProjectPage workspace={workspace} onWorkspaceChange={load} />}
