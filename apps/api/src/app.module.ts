@@ -1,8 +1,9 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { APP_GUARD } from "@nestjs/core";
-import { ThrottlerGuard, ThrottlerModule } from "@nestjs/throttler";
+import { ThrottlerModule } from "@nestjs/throttler";
 import { AuthModule } from "./auth/auth.module";
+import { AppThrottlerGuard } from "./common/app-throttler.guard";
 import { CommonModule } from "./common/common.module";
 import { EventsModule } from "./events/events.module";
 import { HealthController } from "./health.controller";
@@ -28,6 +29,6 @@ import { WorkspacesModule } from "./workspaces/workspaces.module";
     TasksModule,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [{ provide: APP_GUARD, useClass: AppThrottlerGuard }],
 })
 export class AppModule {}
