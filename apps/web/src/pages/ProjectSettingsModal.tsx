@@ -33,6 +33,8 @@ export function ProjectSettingsModal({
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Only re-seed when the modal opens or the project changes. Live refreshes of
+  // the same project must not overwrite what the user is currently picking.
   useEffect(() => {
     if (!open || !project) return;
     setVisibility(project.visibility);
@@ -41,7 +43,7 @@ export function ProjectSettingsModal({
     setTemplateNote("");
     setError(null);
     setNotice(null);
-  }, [open, project?.id, project?.visibility]);
+  }, [open, project?.id]);
 
   if (!project) return null;
 
